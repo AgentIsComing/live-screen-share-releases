@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Live Screen Share</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main>
+      <div class="card">
+        <h1>Live Screen Share</h1>
+        <p>Host your screen in high quality and low latency with WebRTC.</p>
+
+        <div class="row">
+          <input id="roomId" type="text" placeholder="Room ID (example: jayde-room)" />
+          <a class="button" id="hostBtn" href="#">Host Screen</a>
+          <a class="button" id="joinBtn" href="#">Join Stream</a>
+        </div>
+
+        <small>
+          Tip: For system audio, use desktop Chrome/Edge and in the share prompt enable audio.
+        </small>
+      </div>
+    </main>
+
+    <script>
+      const roomInput = document.getElementById('roomId');
+      const hostBtn = document.getElementById('hostBtn');
+      const joinBtn = document.getElementById('joinBtn');
+
+      function getRoomId() {
+        return roomInput.value.trim() || `room-${Math.random().toString(36).slice(2, 8)}`;
+      }
+
+      hostBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const roomId = encodeURIComponent(getRoomId());
+        window.location.href = `/host.html?room=${roomId}`;
+      });
+
+      joinBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const roomId = encodeURIComponent(getRoomId());
+        window.location.href = `/viewer.html?room=${roomId}`;
+      });
+    </script>
+  </body>
+</html>

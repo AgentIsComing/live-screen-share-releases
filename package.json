@@ -1,0 +1,78 @@
+{
+  "name": "live-screen-share",
+  "version": "2.0.8",
+  "private": true,
+  "description": "Desktop low-latency screen sharing with OBS source and custom audio routing",
+  "main": "electron/main.js",
+  "scripts": {
+    "start:signal": "node server.js",
+    "start:public-signal": "node scripts/start_public_signal.js",
+    "start:public-signal-lt": "npx localtunnel --port 3000",
+    "start:app": "set \"ELECTRON_RUN_AS_NODE=\" && electron .",
+    "start:all": "set \"ELECTRON_RUN_AS_NODE=\" && concurrently \"npm run start:signal\" \"npm run start:app\"",
+    "dist:laptop": "set \"ELECTRON_RUN_AS_NODE=\" && electron-packager . \"Live Screen Share Desktop\" --platform=win32 --arch=x64 --out=dist-packaged --overwrite --prune=true",
+    "dist:laptop:zip": "powershell -NoProfile -Command \"if (Test-Path 'dist/LiveScreenShareDesktop-win32-x64.zip') { Remove-Item 'dist/LiveScreenShareDesktop-win32-x64.zip' -Force }; Compress-Archive -Path 'dist-packaged/Live Screen Share Desktop-win32-x64/*' -DestinationPath 'dist/LiveScreenShareDesktop-win32-x64.zip' -Force\"",
+    "dist": "set \"ELECTRON_RUN_AS_NODE=\" && electron-builder --win portable",
+    "dist:dir": "set \"ELECTRON_RUN_AS_NODE=\" && electron-builder --win dir",
+    "build:installer": "set \"ELECTRON_RUN_AS_NODE=\" && electron-builder --win nsis --publish never",
+    "release:public": "set \"ELECTRON_RUN_AS_NODE=\" && electron-builder --win nsis --publish always --config.directories.output=dist-release",
+    "release": "powershell -ExecutionPolicy Bypass -File ./scripts/release.ps1"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "electron": "^37.3.1",
+    "electron-builder": "^26.7.0",
+    "electron-packager": "^17.1.2",
+    "localtunnel": "^2.0.2"
+  },
+  "build": {
+    "appId": "com.jayde.livescreenshare",
+    "productName": "Live Screen Share Desktop",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "renderer/**/*",
+      "scripts/**/*",
+      "server.js",
+      "package.json",
+      "runtime/**/*",
+      "tools/**/*",
+      "assets/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "signAndEditExecutable": false,
+      "icon": "assets/app.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "assets/app.ico",
+      "uninstallerIcon": "assets/app.ico",
+      "installerHeaderIcon": "assets/app.ico"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "${env.RELEASE_OWNER}",
+        "repo": "${env.RELEASE_REPO}",
+        "private": false,
+        "releaseType": "release"
+      }
+    ]
+  },
+  "author": "Jayde <jayde@example.com>"
+}

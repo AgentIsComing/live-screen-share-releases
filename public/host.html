@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Host Screen</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main>
+      <div class="card">
+        <h1>Host Mode</h1>
+        <p id="roomText"></p>
+
+        <div class="row">
+          <select id="quality">
+            <option value="5000000">1080p high quality (5 Mbps)</option>
+            <option value="8000000">1080p very high (8 Mbps)</option>
+            <option value="12000000">1440p ultra (12 Mbps)</option>
+          </select>
+          <button id="startBtn">Start Sharing</button>
+          <button id="stopBtn" class="danger" disabled>Stop</button>
+        </div>
+
+        <div class="row">
+          <input id="viewerLink" class="linkbox" readonly />
+          <button id="copyBtn">Copy Viewer Link</button>
+        </div>
+
+        <p class="status" id="status"></p>
+        <video id="preview" autoplay muted playsinline></video>
+      </div>
+    </main>
+
+    <script src="/host.js"></script>
+  </body>
+</html>
