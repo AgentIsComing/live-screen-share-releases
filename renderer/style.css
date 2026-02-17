@@ -125,3 +125,5 @@ video {
 @media (max-width: 860px) {
   .grid.two { grid-template-columns: 1fr; }
 }
+
+.modal.hidden { display: none; }

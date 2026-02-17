@@ -96,6 +96,16 @@ async function init() {
 
   hostModalConfirmBtn.addEventListener('click', confirmHostStartFromModal);
   hostModalCancelBtn.addEventListener('click', closeHostStartModal);
+  hostStartModalEl.addEventListener('click', (event) => {
+    if (event.target === hostStartModalEl) {
+      closeHostStartModal();
+    }
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !hostStartModalEl.classList.contains('hidden')) {
+      closeHostStartModal();
+    }
+  });
 
   videoSourceEl.addEventListener('change', syncHostSourceUI);
   refreshDevicesBtn.addEventListener('click', refreshDevices);
@@ -344,12 +354,14 @@ async function waitForSignalingJoin(timeoutMs = 10000) {
 function openHostStartModal() {
   hostModalRoomIdEl.value = '';
   hostModalPasswordEl.value = '';
+  hostStartModalEl.hidden = false;
   hostStartModalEl.classList.remove('hidden');
   hostModalRoomIdEl.focus();
 }
 
 function closeHostStartModal() {
   hostStartModalEl.classList.add('hidden');
+  hostStartModalEl.hidden = true;
 }
 
 async function startHostWithPrompt() {
@@ -861,3 +873,4 @@ function tuneReceiversForLatency(peer) {
     }
   }
 }
+
