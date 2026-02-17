@@ -1,20 +1,15 @@
 const modeEl = document.getElementById('mode');
-const roomEl = document.getElementById('roomId');
-const signalUrlEl = document.getElementById('signalUrl');
-const autoTunnelBtn = document.getElementById('autoTunnel');
-const testSignalBtn = document.getElementById('testSignal');
-const checkUpdatesBtn = document.getElementById('checkUpdates');
-const startBackendBtn = document.getElementById('startBackend');
-const stopBackendBtn = document.getElementById('stopBackend');
+const roomIdInputEl = document.getElementById('roomIdInput');
+const roomPasswordEl = document.getElementById('roomPassword');
+const connectRoomBtn = document.getElementById('joinRoom');
+const viewerFormEl = document.getElementById('viewerForm');
+
 const codeServiceWrapEl = document.getElementById('codeServiceWrap');
 const codeServiceUrlEl = document.getElementById('codeServiceUrl');
-const roomPasswordEl = document.getElementById('roomPassword');
-const publishRoomBtn = document.getElementById('publishRoom');
-const joinRoomBtn = document.getElementById('joinRoom');
-const roomHintEl = document.getElementById('roomHint');
-const latencyProfileEl = document.getElementById('latencyProfile');
-const bitrateEl = document.getElementById('bitrate');
-const iceJsonEl = document.getElementById('iceJson');
+const startBackendBtn = document.getElementById('startBackend');
+const stopBackendBtn = document.getElementById('stopBackend');
+const checkUpdatesBtn = document.getElementById('checkUpdates');
+
 const statusEl = document.getElementById('status');
 const updateStatusEl = document.getElementById('updateStatus');
 const versionEl = document.getElementById('version');
@@ -34,37 +29,41 @@ const stopHostBtn = document.getElementById('stopHost');
 const startViewerBtn = document.getElementById('startViewer');
 const stopViewerBtn = document.getElementById('stopViewer');
 
+const bitrateEl = document.getElementById('bitrate');
+const latencyProfileEl = document.getElementById('latencyProfile');
+const iceJsonEl = document.getElementById('iceJson');
 const videoEl = document.getElementById('video');
+
+const DEFAULT_CODE_SERVICE_URL = 'https://live-screen-share-code-service.jaydenrmaine.workers.dev';
+
+const storageKeys = {
+  mode: 'lss.mode',
+  codeServiceUrl: 'lss.codeServiceUrl',
+  bitrate: 'lss.bitrate',
+  latencyProfile: 'lss.latencyProfile',
+  iceJson: 'lss.iceJson'
+};
 
 const defaultIce = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' }
 ];
 
-const storageKeys = {
-  mode: 'lss.mode',
-  room: 'lss.room',
-  signalUrl: 'lss.signalUrl',
-  iceJson: 'lss.iceJson',
-  bitrate: 'lss.bitrate',
-  latencyProfile: 'lss.latencyProfile',
-  codeServiceUrl: 'lss.codeServiceUrl'
-};
-
-let ws = null;
 let mode = 'host';
+let signalUrl = '';
+let roomId = '';
+let roomPassword = '';
+let ws = null;
 let clientId = null;
-let roomId = null;
 let pendingOffer = false;
 let joined = false;
 let hostAvailable = false;
-let localStream = null;
-let pc = null;
 let reconnectTimer = null;
 let lastStatusText = '';
-let lastAutoFilledTunnelUrl = '';
-let lastUpdateStatusText = '';
-const DEFAULT_CODE_SERVICE_URL = 'https://live-screen-share-code-service.jaydenrmaine.workers.dev';
+let lastUpdateText = '';
+let localStream = null;
+let pc = null;
+let backendRunning = false;
 
 init();
 
@@ -72,70 +71,72 @@ async function init() {
   versionEl.textContent = `App v${await window.desktopApp.getVersion()}`;
 
   modeEl.value = localStorage.getItem(storageKeys.mode) || 'host';
-  roomEl.value = localStorage.getItem(storageKeys.room) || 'jayde-room';
-  signalUrlEl.value = localStorage.getItem(storageKeys.signalUrl) || 'ws://localhost:3000/signal';
-  iceJsonEl.value = localStorage.getItem(storageKeys.iceJson) || JSON.stringify(defaultIce);
+  codeServiceUrlEl.value = localStorage.getItem(storageKeys.codeServiceUrl) || DEFAULT_CODE_SERVICE_URL;
   bitrateEl.value = localStorage.getItem(storageKeys.bitrate) || '2500000';
   latencyProfileEl.value = localStorage.getItem(storageKeys.latencyProfile) || 'ultra';
-  codeServiceUrlEl.value = localStorage.getItem(storageKeys.codeServiceUrl) || DEFAULT_CODE_SERVICE_URL;
-  roomHintEl.textContent = 'Host sets password; viewer uses same Room ID + password.';
+  iceJsonEl.value = localStorage.getItem(storageKeys.iceJson) || JSON.stringify(defaultIce);
 
   mode = modeEl.value;
   syncModeUI();
 
   modeEl.addEventListener('change', onModeChange);
-  videoSourceEl.addEventListener('change', syncHostSourceUI);
-  [roomEl, signalUrlEl, iceJsonEl, bitrateEl, latencyProfileEl, codeServiceUrlEl].forEach((el) => el.addEventListener('change', persistInputs));
-  autoTunnelBtn.addEventListener('click', () => autoFillTunnelUrl(false));
-  testSignalBtn.addEventListener('click', testSignalingEndpoint);
-  checkUpdatesBtn.addEventListener('click', manualCheckForUpdates);
+  [codeServiceUrlEl, bitrateEl, latencyProfileEl, iceJsonEl].forEach((el) => {
+    el.addEventListener('change', persistInputs);
+  });
+
   startBackendBtn.addEventListener('click', startBackendFromApp);
   stopBackendBtn.addEventListener('click', stopBackendFromApp);
-  publishRoomBtn.addEventListener('click', publishRoomAccessFromHost);
-  joinRoomBtn.addEventListener('click', joinRoomWithPassword);
+  checkUpdatesBtn.addEventListener('click', manualCheckForUpdates);
 
+  connectRoomBtn.addEventListener('click', connectViewerByRoomPassword);
+
+  videoSourceEl.addEventListener('change', syncHostSourceUI);
   refreshDevicesBtn.addEventListener('click', refreshDevices);
-  startHostBtn.addEventListener('click', startHost);
+  startHostBtn.addEventListener('click', startHostWithPrompt);
   stopHostBtn.addEventListener('click', () => stopHost(true));
   startViewerBtn.addEventListener('click', startViewer);
   stopViewerBtn.addEventListener('click', stopViewer);
 
   await refreshDevices();
   syncHostSourceUI();
-  await autoFillTunnelUrl(true);
-  setInterval(() => {
-    autoFillTunnelUrl(true);
-  }, 5000);
+
   window.desktopApp.onBackendStatus(handleBackendStatus);
   await refreshBackendState();
-  connectSignaling();
 
   window.desktopApp.onUpdaterStatus((message) => {
     setUpdateStatus(message);
-  });}
+  });
+}
 
 function persistInputs() {
   localStorage.setItem(storageKeys.mode, modeEl.value);
-  localStorage.setItem(storageKeys.room, roomEl.value.trim());
-  localStorage.setItem(storageKeys.signalUrl, signalUrlEl.value.trim());
-  localStorage.setItem(storageKeys.iceJson, iceJsonEl.value.trim());
+  localStorage.setItem(storageKeys.codeServiceUrl, codeServiceUrlEl.value.trim());
   localStorage.setItem(storageKeys.bitrate, bitrateEl.value);
   localStorage.setItem(storageKeys.latencyProfile, latencyProfileEl.value);
-  localStorage.setItem(storageKeys.codeServiceUrl, codeServiceUrlEl.value.trim());
+  localStorage.setItem(storageKeys.iceJson, iceJsonEl.value.trim());
 }
 
 function onModeChange() {
   mode = modeEl.value;
   persistInputs();
   syncModeUI();
-  reconnectSignaling();}
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.close();
+  }
+}
 
 function syncModeUI() {
   const isHost = mode === 'host';
   hostPanel.classList.toggle('hidden', !isHost);
   viewerPanel.classList.toggle('hidden', isHost);
   codeServiceWrapEl.classList.toggle('hidden', !isHost);
-  publishRoomBtn.classList.toggle('hidden', !isHost);
+  startBackendBtn.classList.toggle('hidden', !isHost);
+  stopBackendBtn.classList.toggle('hidden', !isHost);
+  if (!isHost) {
+    checkUpdatesBtn.classList.add('hidden');
+  } else {
+    checkUpdatesBtn.classList.remove('hidden');
+  }
   videoEl.muted = isHost;
 }
 
@@ -147,164 +148,69 @@ function syncHostSourceUI() {
 
 function setStatus(text, options = {}) {
   const { force = false } = options;
-  if (!force && text === lastStatusText) {
-    return;
-  }
+  if (!force && text === lastStatusText) return;
   lastStatusText = text;
   statusEl.textContent = text;
-  console.log(`[status ${new Date().toISOString()}] ${text}`);
 }
 
 function setUpdateStatus(text, options = {}) {
   const { force = false } = options;
-  if (!force && text === lastUpdateStatusText) {
-    return;
-  }
-  lastUpdateStatusText = text;
+  if (!force && text === lastUpdateText) return;
+  lastUpdateText = text;
   updateStatusEl.textContent = text;
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function refreshBackendState() {
-  try {
-    const state = await window.desktopApp.getBackendStatus();
-    handleBackendStatus(state);
-  } catch (error) {
-    setStatus(`Backend status check failed: ${error.message}`);
-  }
+  const state = await window.desktopApp.getBackendStatus();
+  handleBackendStatus(state);
 }
 
 function handleBackendStatus(state) {
-  const signalRunning = Boolean(state?.signalRunning);
-  const tunnelRunning = Boolean(state?.tunnelRunning);
-
-  startBackendBtn.disabled = signalRunning && tunnelRunning;
-  stopBackendBtn.disabled = !signalRunning && !tunnelRunning;
+  backendRunning = Boolean(state?.signalRunning) && Boolean(state?.tunnelRunning);
+  startBackendBtn.disabled = backendRunning;
+  stopBackendBtn.disabled = !Boolean(state?.signalRunning || state?.tunnelRunning);
 
   if (state?.wsUrl) {
-    lastAutoFilledTunnelUrl = state.wsUrl;
+    signalUrl = state.wsUrl;
   }
 
-  if (state?.message) {
+  if (state?.message && mode === 'host') {
     setStatus(state.message);
   }
 }
 
 async function startBackendFromApp() {
-  startBackendBtn.disabled = true;
-  setStatus('Starting local signaling and Cloudflare tunnel...');
-
+  setStatus('Starting signaling + tunnel...');
   const result = await window.desktopApp.startBackend();
   handleBackendStatus(result);
-
   if (!result.ok) {
-    setStatus(`Backend start failed: ${result.error}`);
-    return;
+    setStatus('Backend start failed: ' + result.error);
+    return false;
   }
 
-  setTimeout(async () => {
-    await autoFillTunnelUrl(false);
-    reconnectSignaling();
-  }, 1200);
+  for (let i = 0; i < 20; i += 1) {
+    const wsUrl = await window.desktopApp.getTunnelUrl();
+    if (wsUrl) {
+      signalUrl = wsUrl;
+      setStatus('Backend ready.');
+      return true;
+    }
+    await wait(500);
+  }
+
+  setStatus('Tunnel did not become ready yet.');
+  return false;
 }
 
 async function stopBackendFromApp() {
   await window.desktopApp.stopBackend();
-  handleBackendStatus({ signalRunning: false, tunnelRunning: false, message: 'Backend stopped.' });
-}
-
-async function publishRoomAccessFromHost() {
-  if (mode !== 'host') {
-    setStatus('Switch mode to host to publish room access.');
-    return;
-  }
-
-  const roomId = roomEl.value.trim();
-  const password = roomPasswordEl.value;
-  const baseUrl = (codeServiceUrlEl.value || DEFAULT_CODE_SERVICE_URL).trim();
-  const wsUrl = normalizeSignalUrl(signalUrlEl.value.trim());
-
-  if (!roomId) {
-    setStatus('Set Room ID first.');
-    return;
-  }
-
-  if (!password || password.length < 4) {
-    setStatus('Room password must be at least 4 characters.');
-    return;
-  }
-
-  if (!/^wss?:\/\//i.test(wsUrl)) {
-    setStatus('Set a valid signaling URL first.');
-    return;
-  }
-
-  codeServiceUrlEl.value = baseUrl;
-  persistInputs();
-  setStatus('Publishing room access...');
-
-  const result = await window.desktopApp.registerRoomAccess({
-    baseUrl,
-    roomId,
-    password,
-    wsUrl,
-    ttlSeconds: 900
-  });
-
-  if (!result.ok) {
-    setStatus('Publish room failed: ' + result.error);
-    return;
-  }
-
-  roomHintEl.textContent = result.expiresAt
-    ? 'Room published. Expires at ' + new Date(result.expiresAt).toLocaleTimeString()
-    : 'Room published.';
-  setStatus('Room ' + roomId + ' published for viewer login.');
-}
-
-async function joinRoomWithPassword() {
-  if (mode !== 'viewer') {
-    setStatus('Switch mode to viewer to join by room/password.');
-    return;
-  }
-
-  const roomId = roomEl.value.trim();
-  const password = roomPasswordEl.value;
-  const baseUrl = (codeServiceUrlEl.value || DEFAULT_CODE_SERVICE_URL).trim();
-
-  if (!roomId) {
-    setStatus('Enter Room ID first.');
-    return;
-  }
-
-  if (!password) {
-    setStatus('Enter room password.');
-    return;
-  }
-
-  codeServiceUrlEl.value = baseUrl;
-  persistInputs();
-  setStatus('Resolving room ' + roomId + '...');
-
-  const result = await window.desktopApp.resolveRoomAccess({
-    baseUrl,
-    roomId,
-    password
-  });
-
-  if (!result.ok) {
-    setStatus('Room join failed: ' + result.error);
-    return;
-  }
-
-  signalUrlEl.value = normalizeSignalUrl(result.wsUrl);
-  if (result.roomId) {
-    roomEl.value = result.roomId;
-  }
-
-  persistInputs();
-  reconnectSignaling();
-  roomHintEl.textContent = 'Room ' + roomEl.value.trim() + ' resolved. Click Connect as viewer.';
-  setStatus('Room ' + roomEl.value.trim() + ' resolved.');
+  backendRunning = false;
+  signalUrl = '';
+  setStatus('Backend stopped.');
 }
 
 function normalizeSignalUrl(value) {
@@ -323,88 +229,13 @@ function normalizeSignalUrl(value) {
   return trimmed;
 }
 
-function signalToHealthUrl(signalUrl) {
-  if (!signalUrl) return '';
-  try {
-    const url = new URL(signalUrl);
-    if (url.protocol === 'wss:') url.protocol = 'https:';
-    if (url.protocol === 'ws:') url.protocol = 'http:';
-    url.pathname = '/health';
-    url.search = '';
-    url.hash = '';
-    return url.toString();
-  } catch {
-    return '';
-  }
-}
-
-async function testSignalingEndpoint() {
-  const healthUrl = signalToHealthUrl(signalUrlEl.value.trim());
-  if (!healthUrl) {
-    setStatus('Signal URL is invalid.');
-    return;
-  }
-
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
-    const response = await fetch(healthUrl, { signal: controller.signal, cache: 'no-store' });
-    clearTimeout(timeout);
-
-    if (!response.ok) {
-      setStatus(`Signaling health check failed: HTTP ${response.status}`);
-      return;
-    }
-
-    const body = await response.text();
-    setStatus(`Signaling health check OK (${healthUrl}) ${body.slice(0, 50)}`);
-  } catch (error) {
-    setStatus(`Signaling health check failed: ${error.message}`);
-  }
-}
-
-async function autoFillTunnelUrl(silent) {
-  const tunnelWs = normalizeSignalUrl(await window.desktopApp.getTunnelUrl());
-  if (!tunnelWs) {
-    if (!silent) setStatus('No active tunnel URL found. Start backend (signal+tunnel) first.');
-    return;
-  }
-
-  const current = signalUrlEl.value.trim();
-
-  if (current === tunnelWs) {
-    lastAutoFilledTunnelUrl = tunnelWs;
-    if (!silent) setStatus('Signaling URL already uses active Cloudflare tunnel.');
-    return;
-  }
-
-  // Silent auto-fill should not override user-entered custom URLs.
-  if (silent) {
-    const isDefaultOrLocal =
-      current === '' ||
-      /localhost|127\.0\.0\.1/i.test(current) ||
-      /trycloudflare\.com/i.test(current) ||
-      current === lastAutoFilledTunnelUrl;
-
-    if (!isDefaultOrLocal) {
-      return;
-    }
-  }
-
-  signalUrlEl.value = tunnelWs;
-  lastAutoFilledTunnelUrl = tunnelWs;
-  persistInputs();
-  reconnectSignaling();
-  setStatus(`Auto-filled signaling URL: ${tunnelWs}`);
-}
-
 function parseIceServers() {
   try {
     const parsed = JSON.parse(iceJsonEl.value.trim());
     if (!Array.isArray(parsed)) throw new Error('ICE servers must be an array');
     return parsed;
   } catch (error) {
-    setStatus(`Invalid ICE JSON: ${error.message}`);
+    setStatus('Invalid ICE JSON: ' + error.message);
     return null;
   }
 }
@@ -412,7 +243,6 @@ function parseIceServers() {
 function rtcConfig() {
   const iceServers = parseIceServers();
   if (!iceServers) return null;
-
   return {
     iceServers,
     bundlePolicy: 'max-bundle',
@@ -420,19 +250,13 @@ function rtcConfig() {
   };
 }
 
-function currentRoomId() {
-  return roomEl.value.trim();
-}
-
 function connectSignaling() {
-  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+  if (!signalUrl || !roomId) {
+    setStatus('Missing signaling or room configuration.');
     return;
   }
-  const signalUrl = signalUrlEl.value.trim();
-  roomId = currentRoomId();
 
-  if (!signalUrl || !roomId) {
-    setStatus('Signal URL and room ID are required.');
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
     return;
   }
 
@@ -455,18 +279,20 @@ function connectSignaling() {
       joined = true;
       hostAvailable = Boolean(message.hostAvailable);
       if (mode === 'viewer') {
-        setStatus(hostAvailable ? 'Viewer ready. Click connect.' : 'Viewer ready. Waiting for host.');
-        startViewerBtn.disabled = !hostAvailable;
+        if (hostAvailable) {
+          await startViewer();
+        } else {
+          pendingOffer = true;
+          setStatus('Waiting for host...');
+        }
       } else {
-        setStatus('Host ready. Configure source and start hosting.');
+        setStatus('Host signaling ready.');
       }
       return;
     }
 
     if (message.type === 'host-available' && mode === 'viewer') {
       hostAvailable = true;
-      startViewerBtn.disabled = false;
-      setStatus('Host is online. Click connect.');
       if (pendingOffer) {
         pendingOffer = false;
         await startViewer();
@@ -479,36 +305,29 @@ function connectSignaling() {
       return;
     }
 
-    if (message.type === 'broadcast-ended') {
-      if (mode === 'viewer') {
-        stopViewer();
-        setStatus('Host stopped sharing.');
-      }
+    if (message.type === 'broadcast-ended' && mode === 'viewer') {
+      stopViewer();
+      setStatus('Host stopped sharing.');
       return;
     }
 
     if (message.type === 'error') {
-      setStatus(`Signal error: ${message.message}`);
+      setStatus('Signal error: ' + message.message);
     }
   });
 
   ws.addEventListener('close', (event) => {
     joined = false;
-    const reason = event.reason ? `, reason: ${event.reason}` : '';
-    setStatus(`Signaling disconnected (code ${event.code}${reason}). Reconnecting in 2s...`);
-    if (reconnectTimer) {
-      return;
+    if (mode === 'host') {
+      setStatus(`Signaling disconnected (code ${event.code}). Reconnecting...`);
     }
+    if (reconnectTimer) return;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       if (!ws || ws.readyState === WebSocket.CLOSED) {
         connectSignaling();
       }
     }, 2000);
-  });
-
-  ws.addEventListener('error', () => {
-    setStatus(`Signaling socket error for ${signalUrl}`);
   });
 }
 
@@ -518,15 +337,127 @@ function reconnectSignaling() {
   }
   joined = false;
   hostAvailable = false;
-  connectSignaling();}
+  connectSignaling();
+}
+
+async function waitForSignalingJoin(timeoutMs = 10000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (joined && ws && ws.readyState === WebSocket.OPEN) {
+      return true;
+    }
+    await wait(200);
+  }
+  return false;
+}
+
+async function startHostWithPrompt() {
+  if (mode !== 'host') {
+    setStatus('Switch mode to host first.');
+    return;
+  }
+
+  const promptedRoomId = window.prompt('Enter Room ID');
+  if (!promptedRoomId) return;
+  const promptedPassword = window.prompt('Enter Room Password (at least 4 chars)');
+  if (!promptedPassword || promptedPassword.length < 4) {
+    setStatus('Password must be at least 4 characters.');
+    return;
+  }
+
+  roomId = promptedRoomId.trim();
+  roomPassword = promptedPassword;
+
+  if (!backendRunning) {
+    const started = await startBackendFromApp();
+    if (!started) return;
+  }
+
+  if (!signalUrl) {
+    signalUrl = normalizeSignalUrl(await window.desktopApp.getTunnelUrl());
+  }
+  if (!signalUrl) {
+    setStatus('No tunnel signaling URL available yet.');
+    return;
+  }
+
+  reconnectSignaling();
+  const ready = await waitForSignalingJoin();
+  if (!ready) {
+    setStatus('Signaling join timed out.');
+    return;
+  }
+
+  const baseUrl = (codeServiceUrlEl.value || DEFAULT_CODE_SERVICE_URL).trim();
+  const publish = await window.desktopApp.registerRoomAccess({
+    baseUrl,
+    roomId,
+    password: roomPassword,
+    wsUrl: signalUrl,
+    ttlSeconds: 900
+  });
+
+  if (!publish.ok) {
+    setStatus('Publish room failed: ' + publish.error);
+    return;
+  }
+
+  await startHost();
+}
+
+async function connectViewerByRoomPassword() {
+  if (mode !== 'viewer') {
+    setStatus('Switch mode to viewer first.');
+    return;
+  }
+
+  const viewerRoomId = roomIdInputEl.value.trim();
+  const password = roomPasswordEl.value;
+  if (!viewerRoomId) {
+    setStatus('Enter Room ID.');
+    return;
+  }
+  if (!password) {
+    setStatus('Enter Room password.');
+    return;
+  }
+
+  roomId = viewerRoomId;
+  roomPassword = password;
+
+  const result = await window.desktopApp.resolveRoomAccess({
+    baseUrl: DEFAULT_CODE_SERVICE_URL,
+    roomId,
+    password: roomPassword
+  });
+
+  if (!result.ok) {
+    setStatus('Room join failed: ' + result.error);
+    return;
+  }
+
+  signalUrl = normalizeSignalUrl(result.wsUrl);
+  reconnectSignaling();
+
+  const ready = await waitForSignalingJoin();
+  if (!ready) {
+    setStatus('Could not join signaling.');
+    return;
+  }
+
+  if (hostAvailable) {
+    await startViewer();
+  } else {
+    pendingOffer = true;
+    setStatus('Waiting for host...');
+  }
+}
 
 async function refreshDevices() {
   try {
     const temp = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
     temp.getTracks().forEach((t) => t.stop());
-  } catch {
-    // OS/browser permissions may block labels.
-  }
+  } catch {}
 
   const [devices, desktopSources] = await Promise.all([
     navigator.mediaDevices.enumerateDevices(),
@@ -573,8 +504,6 @@ async function refreshDevices() {
     option.textContent = d.label || `Audio input ${audioDeviceEl.length}`;
     audioDeviceEl.appendChild(option);
   }
-
-  setStatus('Device and display source list refreshed.');
 }
 
 function makePeerConnection() {
@@ -599,7 +528,10 @@ function makePeerConnection() {
     const state = peer.connectionState;
     if (state === 'connected') {
       setStatus(mode === 'host' ? 'Viewer connected.' : 'Connected to host stream.');
-      if (mode === 'viewer') { tuneReceiversForLatency(peer); }
+      if (mode === 'viewer') {
+        viewerFormEl.classList.add('hidden');
+        tuneReceiversForLatency(peer);
+      }
     }
     if (state === 'failed' || state === 'disconnected') {
       setStatus('Peer connection dropped.');
@@ -670,12 +602,6 @@ async function captureDisplayStream(useDisplayAudio) {
     firstError = error;
   }
 
-  if (useDisplayAudio) {
-    setStatus('Display audio capture failed, retrying with video-only desktop capture.');
-  } else {
-    setStatus('Desktop capture retrying with lower frame rate.');
-  }
-
   try {
     return await navigator.mediaDevices.getUserMedia({
       video: desktopVideoConstraints(getLatencyProfile().maxFps),
@@ -744,11 +670,6 @@ async function buildHostStream() {
 }
 
 async function startHost() {
-  if (mode !== 'host') {
-    setStatus('Switch mode to host first.');
-    return;
-  }
-
   if (!joined || !ws || ws.readyState !== WebSocket.OPEN) {
     setStatus('Signaling not ready yet.');
     return;
@@ -762,7 +683,7 @@ async function startHost() {
   try {
     localStream = await buildHostStream();
   } catch (error) {
-    setStatus(`Capture failed: ${error.message}`);
+    setStatus('Capture failed: ' + error.message);
     return;
   }
 
@@ -772,7 +693,7 @@ async function startHost() {
   startHostBtn.disabled = true;
   stopHostBtn.disabled = false;
 
-  setStatus('Hosting started. Ask viewer to connect now.');
+  setStatus('Hosting started.');
 }
 
 function stopTracks(stream) {
@@ -806,19 +727,12 @@ function stopHost(sendSignal) {
 }
 
 async function startViewer() {
-  if (mode !== 'viewer') {
-    setStatus('Switch mode to viewer first.');
-    return;
-  }
-
   if (!joined) {
-    setStatus('Signaling not joined yet.');
     return;
   }
 
   if (!hostAvailable) {
     pendingOffer = true;
-    setStatus('Waiting for host. Will auto-connect when host appears.');
     return;
   }
 
@@ -839,7 +753,6 @@ async function startViewer() {
 
   startViewerBtn.disabled = true;
   stopViewerBtn.disabled = false;
-  setStatus('Connecting to host...');
 }
 
 function stopViewer() {
@@ -853,10 +766,7 @@ async function handleSignal(data) {
   if (!data) return;
 
   if (mode === 'host') {
-    if (!localStream) {
-      setStatus('Viewer requested stream, but hosting has not started.');
-      return;
-    }
+    if (!localStream) return;
 
     if (data.offer) {
       resetPeer();
@@ -871,10 +781,8 @@ async function handleSignal(data) {
         if (track.kind === 'video') {
           const params = sender.getParameters();
           params.degradationPreference = 'maintain-framerate';
-          params.encodings = [{ maxBitrate, maxFramerate: profile.maxFps, networkPriority: "high" }];
-          sender.setParameters(params).catch(() => {
-            // Some runtimes reject advanced encoding params.
-          });
+          params.encodings = [{ maxBitrate, maxFramerate: profile.maxFps, networkPriority: 'high' }];
+          sender.setParameters(params).catch(() => {});
         }
       }
 
@@ -934,15 +842,16 @@ async function manualCheckForUpdates() {
 
   setUpdateStatus('Checking for updates...');
 }
+
 function getLatencyProfile() {
   const modeName = latencyProfileEl.value;
   if (modeName === 'ultra') {
-    return { name: modeName, maxWidth: 1280, maxHeight: 720, maxFps: 24, maxBitrate: 2000000, playoutDelay: 0 };
+    return { maxWidth: 1280, maxHeight: 720, maxFps: 24, maxBitrate: 2000000, playoutDelay: 0 };
   }
   if (modeName === 'low') {
-    return { name: modeName, maxWidth: 1600, maxHeight: 900, maxFps: 30, maxBitrate: 3000000, playoutDelay: 0.04 };
+    return { maxWidth: 1600, maxHeight: 900, maxFps: 30, maxBitrate: 3000000, playoutDelay: 0.04 };
   }
-  return { name: modeName, maxWidth: 1920, maxHeight: 1080, maxFps: 30, maxBitrate: 5000000, playoutDelay: 0.08 };
+  return { maxWidth: 1920, maxHeight: 1080, maxFps: 30, maxBitrate: 5000000, playoutDelay: 0.08 };
 }
 
 function tuneReceiversForLatency(peer) {
@@ -951,32 +860,7 @@ function tuneReceiversForLatency(peer) {
     if (receiver.track?.kind === 'video') {
       try {
         receiver.playoutDelayHint = profile.playoutDelay;
-      } catch {
-        // Browser/runtime may not support playoutDelayHint.
-      }
+      } catch {}
     }
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

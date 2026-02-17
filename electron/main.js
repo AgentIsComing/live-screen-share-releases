@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, Menu } = require('electron');
 let autoUpdater = null;
 try {
   ({ autoUpdater } = require('electron-updater'));
@@ -33,7 +33,6 @@ const backendState = {
 let signalProc = null;
 let tunnelProc = null;
 
-// WGC can freeze/fail on some Windows systems; force legacy desktop capturer path.
 if (app?.commandLine?.appendSwitch) {
   app.commandLine.appendSwitch('disable-features', 'AllowWgcScreenCapturer,AllowWgcWindowCapturer,AllowWgcZeroHz');
 }
@@ -44,6 +43,7 @@ function createWindow() {
     height: 900,
     minWidth: 980,
     minHeight: 720,
+    autoHideMenuBar: true,
     backgroundColor: '#10131c',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -53,6 +53,8 @@ function createWindow() {
     }
   });
 
+  Menu.setApplicationMenu(null);
+  win.setMenuBarVisibility(false);
   win.loadFile(path.join(projectRoot, 'renderer', 'index.html'));
 }
 
@@ -116,12 +118,20 @@ function normalizeServiceBaseUrl(value) {
   return base;
 }
 
-function normalizeJoinCode(value) {
-  const code = String(value || '').trim();
-  if (!/^\d{5}$/.test(code)) {
-    throw new Error('Join code must be exactly 5 digits.');
+function normalizeRoomId(value) {
+  const roomId = String(value || '').trim();
+  if (!roomId) {
+    throw new Error('Room ID is required.');
   }
-  return code;
+  return roomId;
+}
+
+function normalizePassword(value) {
+  const password = String(value || '');
+  if (!password || password.length < 4) {
+    throw new Error('Room password must be at least 4 characters.');
+  }
+  return password;
 }
 
 async function callCodeService(baseUrl, route, body) {
@@ -146,6 +156,7 @@ async function callCodeService(baseUrl, route, body) {
 
   return data;
 }
+
 function setupAutoUpdater() {
   if (!app.isPackaged || !autoUpdater) {
     return;
@@ -171,14 +182,13 @@ function setupAutoUpdater() {
 
   setTimeout(() => {
     autoUpdater.checkForUpdatesAndNotify().catch(() => {
-      // ignore updater failures in misconfigured environments
+      // ignore
     });
   }, 3000);
 }
 
 function startSignalServer() {
   let reuseExternalSignal = false;
-
   if (signalProc && !signalProc.killed) {
     backendState.signalRunning = true;
     backendState.signalPid = signalProc.pid || null;
@@ -187,10 +197,7 @@ function startSignalServer() {
 
   signalProc = spawn(process.execPath, [serverEntry], {
     cwd: backendCwd,
-    env: {
-      ...process.env,
-      ELECTRON_RUN_AS_NODE: '1'
-    },
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -201,7 +208,6 @@ function startSignalServer() {
   signalProc.stdout.on('data', (chunk) => {
     const text = chunk.toString();
     if (text.includes('Signaling server listening')) {
-      backendState.signalRunning = true;
       emitBackendStatus('Signaling server started.');
     }
   });
@@ -212,11 +218,9 @@ function startSignalServer() {
       reuseExternalSignal = true;
       backendState.signalRunning = true;
       backendState.signalPid = null;
-      backendState.lastError = 'Port 3000 already in use (reusing existing signaling server).';
-      emitBackendStatus(backendState.lastError);
+      emitBackendStatus('Port 3000 already in use (reusing existing signaling server).');
       return;
     }
-
     backendState.lastError = text.trim();
     emitBackendStatus(`Signal error: ${backendState.lastError}`);
   });
@@ -224,8 +228,7 @@ function startSignalServer() {
   signalProc.on('error', (error) => {
     backendState.signalRunning = false;
     backendState.signalPid = null;
-    backendState.lastError = `Signal spawn failed: ${error.message}`;
-    emitBackendStatus(backendState.lastError);
+    emitBackendStatus(`Signal spawn failed: ${error.message}`);
   });
 
   signalProc.on('exit', () => {
@@ -233,10 +236,8 @@ function startSignalServer() {
     if (reuseExternalSignal) {
       backendState.signalRunning = true;
       backendState.signalPid = null;
-      emitBackendStatus('Using existing signaling server on port 3000.');
       return;
     }
-
     backendState.signalRunning = false;
     backendState.signalPid = null;
     emitBackendStatus('Signaling server stopped.');
@@ -251,9 +252,7 @@ function startTunnel() {
   }
 
   if (!fs.existsSync(cloudflaredPath)) {
-    backendState.lastError = `cloudflared not found at ${cloudflaredPath}`;
-    emitBackendStatus(backendState.lastError);
-    throw new Error(backendState.lastError);
+    throw new Error(`cloudflared not found at ${cloudflaredPath}`);
   }
 
   tunnelProc = spawn(cloudflaredPath, ['tunnel', '--url', 'http://localhost:3000'], {
@@ -273,11 +272,6 @@ function startTunnel() {
       writeTunnelInfo(match[1]);
       emitBackendStatus(`Tunnel ready: ${backendState.wsUrl}`);
     }
-
-    if (text.toLowerCase().includes('error')) {
-      backendState.lastError = text.trim();
-      emitBackendStatus(`Tunnel error: ${backendState.lastError}`);
-    }
   }
 
   tunnelProc.stdout.on('data', handleChunk);
@@ -286,8 +280,7 @@ function startTunnel() {
   tunnelProc.on('error', (error) => {
     backendState.tunnelRunning = false;
     backendState.tunnelPid = null;
-    backendState.lastError = `Tunnel spawn failed: ${error.message}`;
-    emitBackendStatus(backendState.lastError);
+    emitBackendStatus(`Tunnel spawn failed: ${error.message}`);
   });
 
   tunnelProc.on('exit', () => {
@@ -300,21 +293,11 @@ function startTunnel() {
 
 function stopBackend() {
   if (tunnelProc && !tunnelProc.killed) {
-    try {
-      tunnelProc.kill('SIGTERM');
-    } catch {
-      // ignore
-    }
+    try { tunnelProc.kill('SIGTERM'); } catch {}
   }
-
   if (signalProc && !signalProc.killed) {
-    try {
-      signalProc.kill('SIGTERM');
-    } catch {
-      // ignore
-    }
+    try { signalProc.kill('SIGTERM'); } catch {}
   }
-
   backendState.signalRunning = false;
   backendState.tunnelRunning = false;
   backendState.signalPid = null;
@@ -328,22 +311,14 @@ function stopBackend() {
 app.whenReady().then(() => {
   setupAutoUpdater();
   createWindow();
-
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
-app.on('before-quit', () => {
-  stopBackend();
-});
-
+app.on('before-quit', () => stopBackend());
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  if (process.platform !== 'darwin') app.quit();
 });
 
 ipcMain.handle('app-version', () => app.getVersion());
@@ -353,86 +328,28 @@ ipcMain.handle('list-desktop-sources', async () => {
     types: ['screen', 'window'],
     thumbnailSize: { width: 0, height: 0 }
   });
-
-  return sources.map((source) => ({
-    id: source.id,
-    name: source.name
-  }));
+  return sources.map((source) => ({ id: source.id, name: source.name }));
 });
 
 ipcMain.handle('get-tunnel-url', () => {
   try {
     if (!fs.existsSync(tunnelInfoPath)) return null;
     const raw = fs.readFileSync(tunnelInfoPath, 'utf-8');
-    const parsed = JSON.parse(raw);
-    return parsed?.wsUrl || null;
+    return JSON.parse(raw)?.wsUrl || null;
   } catch {
     return null;
   }
 });
 
-ipcMain.handle('register-join-code', async (_event, payload = {}) => {
-  try {
-    const baseUrl = normalizeServiceBaseUrl(payload.baseUrl);
-    const wsUrl = String(payload.wsUrl || '').trim();
-    const roomId = String(payload.roomId || '').trim();
-
-    if (!/^wss?:\/\//i.test(wsUrl)) {
-      throw new Error('A valid signaling URL is required before generating a join code.');
-    }
-
-    const result = await callCodeService(baseUrl, '/register', {
-      wsUrl,
-      roomId,
-      ttlSeconds: 900
-    });
-
-    return {
-      ok: true,
-      code: result.code,
-      expiresAt: result.expiresAt || null
-    };
-  } catch (error) {
-    return { ok: false, error: error.message };
-  }
-});
-
-ipcMain.handle('resolve-join-code', async (_event, payload = {}) => {
-  try {
-    const baseUrl = normalizeServiceBaseUrl(payload.baseUrl);
-    const code = normalizeJoinCode(payload.code);
-
-    const result = await callCodeService(baseUrl, '/resolve', { code });
-
-    return {
-      ok: true,
-      wsUrl: result.wsUrl,
-      roomId: result.roomId || null
-    };
-  } catch (error) {
-    return { ok: false, error: error.message };
-  }
-});
 ipcMain.handle('register-room-access', async (_event, payload = {}) => {
   try {
-    const baseUrl = normalizeServiceBaseUrl(payload.baseUrl);
-    const roomId = normalizeRoomId(payload.roomId);
-    const password = normalizePassword(payload.password);
-    const wsUrl = normalizeWsUrl(payload.wsUrl || '');
-    const ttlSeconds = Number(payload.ttlSeconds || 900);
-
-    const result = await callCodeService(baseUrl, '/register-room', {
-      roomId,
-      password,
-      wsUrl,
-      ttlSeconds
+    const result = await callCodeService(payload.baseUrl, '/register-room', {
+      roomId: normalizeRoomId(payload.roomId),
+      password: normalizePassword(payload.password),
+      wsUrl: normalizeWsUrl(payload.wsUrl),
+      ttlSeconds: Number(payload.ttlSeconds || 900)
     });
-
-    return {
-      ok: true,
-      roomId: result.roomId || roomId,
-      expiresAt: result.expiresAt || null
-    };
+    return { ok: true, roomId: result.roomId, expiresAt: result.expiresAt || null };
   } catch (error) {
     return { ok: false, error: error.message };
   }
@@ -440,24 +357,16 @@ ipcMain.handle('register-room-access', async (_event, payload = {}) => {
 
 ipcMain.handle('resolve-room-access', async (_event, payload = {}) => {
   try {
-    const baseUrl = normalizeServiceBaseUrl(payload.baseUrl);
-    const roomId = normalizeRoomId(payload.roomId);
-    const password = normalizePassword(payload.password);
-
-    const result = await callCodeService(baseUrl, '/resolve-room', {
-      roomId,
-      password
+    const result = await callCodeService(payload.baseUrl, '/resolve-room', {
+      roomId: normalizeRoomId(payload.roomId),
+      password: normalizePassword(payload.password)
     });
-
-    return {
-      ok: true,
-      roomId: result.roomId || roomId,
-      wsUrl: result.wsUrl
-    };
+    return { ok: true, roomId: result.roomId, wsUrl: result.wsUrl };
   } catch (error) {
     return { ok: false, error: error.message };
   }
 });
+
 ipcMain.handle('start-backend', async () => {
   try {
     backendState.lastError = null;
@@ -482,15 +391,11 @@ ipcMain.handle('backend-status', () => {
     const wsUrl = fs.existsSync(tunnelInfoPath)
       ? JSON.parse(fs.readFileSync(tunnelInfoPath, 'utf-8'))?.wsUrl || null
       : null;
-
     if (wsUrl) {
       backendState.wsUrl = wsUrl;
       backendState.tunnelUrl = wsUrl.replace(/^wss:/i, 'https:').replace(/\/signal$/, '');
     }
-  } catch {
-    // ignore
-  }
-
+  } catch {}
   return { ...backendState };
 });
 
@@ -498,7 +403,6 @@ ipcMain.handle('check-for-updates', async () => {
   if (!app.isPackaged || !autoUpdater) {
     return { ok: false, error: 'Update checks run only in installed builds.' };
   }
-
   try {
     await autoUpdater.checkForUpdates();
     return { ok: true };
@@ -506,9 +410,3 @@ ipcMain.handle('check-for-updates', async () => {
     return { ok: false, error: error.message };
   }
 });
-
-
-
-
-
-
