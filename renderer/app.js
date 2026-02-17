@@ -6,15 +6,17 @@ const testSignalBtn = document.getElementById('testSignal');
 const checkUpdatesBtn = document.getElementById('checkUpdates');
 const startBackendBtn = document.getElementById('startBackend');
 const stopBackendBtn = document.getElementById('stopBackend');
+const codeServiceWrapEl = document.getElementById('codeServiceWrap');
 const codeServiceUrlEl = document.getElementById('codeServiceUrl');
-const joinCodeEl = document.getElementById('joinCode');
-const generateCodeBtn = document.getElementById('generateCode');
-const resolveCodeBtn = document.getElementById('resolveCode');
-const codeHintEl = document.getElementById('codeHint');
+const roomPasswordEl = document.getElementById('roomPassword');
+const publishRoomBtn = document.getElementById('publishRoom');
+const joinRoomBtn = document.getElementById('joinRoom');
+const roomHintEl = document.getElementById('roomHint');
 const latencyProfileEl = document.getElementById('latencyProfile');
 const bitrateEl = document.getElementById('bitrate');
 const iceJsonEl = document.getElementById('iceJson');
 const statusEl = document.getElementById('status');
+const updateStatusEl = document.getElementById('updateStatus');
 const versionEl = document.getElementById('version');
 
 const hostPanel = document.getElementById('hostPanel');
@@ -61,6 +63,8 @@ let pc = null;
 let reconnectTimer = null;
 let lastStatusText = '';
 let lastAutoFilledTunnelUrl = '';
+let lastUpdateStatusText = '';
+const DEFAULT_CODE_SERVICE_URL = 'https://live-screen-share-code-service.jaydenrmaine.workers.dev';
 
 init();
 
@@ -73,8 +77,8 @@ async function init() {
   iceJsonEl.value = localStorage.getItem(storageKeys.iceJson) || JSON.stringify(defaultIce);
   bitrateEl.value = localStorage.getItem(storageKeys.bitrate) || '2500000';
   latencyProfileEl.value = localStorage.getItem(storageKeys.latencyProfile) || 'ultra';
-  codeServiceUrlEl.value = localStorage.getItem(storageKeys.codeServiceUrl) || '';
-  codeHintEl.textContent = 'Host generates a code, viewer enters it.';
+  codeServiceUrlEl.value = localStorage.getItem(storageKeys.codeServiceUrl) || DEFAULT_CODE_SERVICE_URL;
+  roomHintEl.textContent = 'Host sets password; viewer uses same Room ID + password.';
 
   mode = modeEl.value;
   syncModeUI();
@@ -82,16 +86,13 @@ async function init() {
   modeEl.addEventListener('change', onModeChange);
   videoSourceEl.addEventListener('change', syncHostSourceUI);
   [roomEl, signalUrlEl, iceJsonEl, bitrateEl, latencyProfileEl, codeServiceUrlEl].forEach((el) => el.addEventListener('change', persistInputs));
-  joinCodeEl.addEventListener('input', () => {
-    joinCodeEl.value = joinCodeEl.value.replace(/\D/g, '').slice(0, 5);
-  });
   autoTunnelBtn.addEventListener('click', () => autoFillTunnelUrl(false));
   testSignalBtn.addEventListener('click', testSignalingEndpoint);
   checkUpdatesBtn.addEventListener('click', manualCheckForUpdates);
   startBackendBtn.addEventListener('click', startBackendFromApp);
   stopBackendBtn.addEventListener('click', stopBackendFromApp);
-  generateCodeBtn.addEventListener('click', generateJoinCodeFromHost);
-  resolveCodeBtn.addEventListener('click', resolveJoinCodeForViewer);
+  publishRoomBtn.addEventListener('click', publishRoomAccessFromHost);
+  joinRoomBtn.addEventListener('click', joinRoomWithPassword);
 
   refreshDevicesBtn.addEventListener('click', refreshDevices);
   startHostBtn.addEventListener('click', startHost);
@@ -110,7 +111,7 @@ async function init() {
   connectSignaling();
 
   window.desktopApp.onUpdaterStatus((message) => {
-    setStatus(message);
+    setUpdateStatus(message);
   });}
 
 function persistInputs() {
@@ -133,6 +134,8 @@ function syncModeUI() {
   const isHost = mode === 'host';
   hostPanel.classList.toggle('hidden', !isHost);
   viewerPanel.classList.toggle('hidden', isHost);
+  codeServiceWrapEl.classList.toggle('hidden', !isHost);
+  publishRoomBtn.classList.toggle('hidden', !isHost);
   videoEl.muted = isHost;
 }
 
@@ -150,6 +153,15 @@ function setStatus(text, options = {}) {
   lastStatusText = text;
   statusEl.textContent = text;
   console.log(`[status ${new Date().toISOString()}] ${text}`);
+}
+
+function setUpdateStatus(text, options = {}) {
+  const { force = false } = options;
+  if (!force && text === lastUpdateStatusText) {
+    return;
+  }
+  lastUpdateStatusText = text;
+  updateStatusEl.textContent = text;
 }
 
 async function refreshBackendState() {
@@ -200,71 +212,87 @@ async function stopBackendFromApp() {
   handleBackendStatus({ signalRunning: false, tunnelRunning: false, message: 'Backend stopped.' });
 }
 
-async function generateJoinCodeFromHost() {
+async function publishRoomAccessFromHost() {
   if (mode !== 'host') {
-    setStatus('Switch mode to host to generate a join code.');
+    setStatus('Switch mode to host to publish room access.');
     return;
   }
 
-  const baseUrl = codeServiceUrlEl.value.trim();
+  const roomId = roomEl.value.trim();
+  const password = roomPasswordEl.value;
+  const baseUrl = (codeServiceUrlEl.value || DEFAULT_CODE_SERVICE_URL).trim();
   const wsUrl = normalizeSignalUrl(signalUrlEl.value.trim());
 
-  if (!baseUrl) {
-    setStatus('Set Code service URL first.');
+  if (!roomId) {
+    setStatus('Set Room ID first.');
     return;
   }
 
-  if (!wsUrl || !/^wss?:\/\//i.test(wsUrl)) {
-    setStatus('Set a valid signaling URL before generating a code.');
+  if (!password || password.length < 4) {
+    setStatus('Room password must be at least 4 characters.');
     return;
   }
 
+  if (!/^wss?:\/\//i.test(wsUrl)) {
+    setStatus('Set a valid signaling URL first.');
+    return;
+  }
+
+  codeServiceUrlEl.value = baseUrl;
   persistInputs();
-  setStatus('Generating 5-digit join code...');
+  setStatus('Publishing room access...');
 
-  const result = await window.desktopApp.registerJoinCode({
+  const result = await window.desktopApp.registerRoomAccess({
     baseUrl,
+    roomId,
+    password,
     wsUrl,
-    roomId: currentRoomId()
+    ttlSeconds: 900
   });
 
   if (!result.ok) {
-    setStatus(`Join code generation failed: ${result.error}`);
+    setStatus('Publish room failed: ' + result.error);
     return;
   }
 
-  joinCodeEl.value = result.code;
-  codeHintEl.textContent = result.expiresAt
-    ? `Code ${result.code} expires at ${new Date(result.expiresAt).toLocaleTimeString()}`
-    : `Code ${result.code} generated.`;
-  setStatus(`Join code ready: ${result.code}`);
+  roomHintEl.textContent = result.expiresAt
+    ? 'Room published. Expires at ' + new Date(result.expiresAt).toLocaleTimeString()
+    : 'Room published.';
+  setStatus('Room ' + roomId + ' published for viewer login.');
 }
 
-async function resolveJoinCodeForViewer() {
+async function joinRoomWithPassword() {
   if (mode !== 'viewer') {
-    setStatus('Switch mode to viewer to use a join code.');
+    setStatus('Switch mode to viewer to join by room/password.');
     return;
   }
 
-  const baseUrl = codeServiceUrlEl.value.trim();
-  const code = joinCodeEl.value.trim();
+  const roomId = roomEl.value.trim();
+  const password = roomPasswordEl.value;
+  const baseUrl = (codeServiceUrlEl.value || DEFAULT_CODE_SERVICE_URL).trim();
 
-  if (!baseUrl) {
-    setStatus('Set Code service URL first.');
+  if (!roomId) {
+    setStatus('Enter Room ID first.');
     return;
   }
 
-  if (!/^\d{5}$/.test(code)) {
-    setStatus('Enter a 5-digit join code.');
+  if (!password) {
+    setStatus('Enter room password.');
     return;
   }
 
+  codeServiceUrlEl.value = baseUrl;
   persistInputs();
-  setStatus(`Resolving join code ${code}...`);
+  setStatus('Resolving room ' + roomId + '...');
 
-  const result = await window.desktopApp.resolveJoinCode({ baseUrl, code });
+  const result = await window.desktopApp.resolveRoomAccess({
+    baseUrl,
+    roomId,
+    password
+  });
+
   if (!result.ok) {
-    setStatus(`Join code failed: ${result.error}`);
+    setStatus('Room join failed: ' + result.error);
     return;
   }
 
@@ -272,10 +300,13 @@ async function resolveJoinCodeForViewer() {
   if (result.roomId) {
     roomEl.value = result.roomId;
   }
+
   persistInputs();
   reconnectSignaling();
-  setStatus(`Join code resolved. Connected to room ${roomEl.value.trim()}.`);
+  roomHintEl.textContent = 'Room ' + roomEl.value.trim() + ' resolved. Click Connect as viewer.';
+  setStatus('Room ' + roomEl.value.trim() + ' resolved.');
 }
+
 function normalizeSignalUrl(value) {
   const trimmed = (value || '').trim();
   if (!trimmed) return '';
@@ -897,11 +928,11 @@ window.addEventListener('beforeunload', () => {
 async function manualCheckForUpdates() {
   const result = await window.desktopApp.checkForUpdates();
   if (!result.ok) {
-    setStatus('Update check failed: ' + result.error);
+    setUpdateStatus('Update check failed: ' + result.error);
     return;
   }
 
-  setStatus('Checking for updates...');
+  setUpdateStatus('Checking for updates...');
 }
 function getLatencyProfile() {
   const modeName = latencyProfileEl.value;
@@ -926,6 +957,14 @@ function tuneReceiversForLatency(peer) {
     }
   }
 }
+
+
+
+
+
+
+
+
 
 
 

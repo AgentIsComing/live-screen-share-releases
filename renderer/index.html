@@ -44,19 +44,19 @@
             <button id="checkUpdates" type="button">Check app updates</button>
           </label>
 
-          <label>
-            Code service URL (Cloudflare Worker)
+          <label id="codeServiceWrap">
+            Code service URL (Host advanced)
             <input id="codeServiceUrl" type="text" placeholder="https://live-screen-share-code-service.<subdomain>.workers.dev" />
           </label>
 
           <label>
-            Join code
+            Room password
             <div class="row">
-              <input id="joinCode" type="text" inputmode="numeric" maxlength="5" placeholder="12345" />
-              <button id="generateCode" type="button">Generate code (host)</button>
-              <button id="resolveCode" type="button">Use code (viewer)</button>
+              <input id="roomPassword" type="password" placeholder="Room password" />
+              <button id="publishRoom" type="button">Publish room access (host)</button>
+              <button id="joinRoom" type="button">Join with room + password</button>
             </div>
-            <small id="codeHint">Host generates a code, viewer enters it.</small>
+            <small id="roomHint">Host sets password; viewer uses same Room ID + password.</small>
           </label>
 
           <label>
@@ -136,6 +136,7 @@
         </div>
 
         <p id="status" class="status"></p>
+        <p id="updateStatus" class="status"></p>
         <small id="version"></small>
       </section>
 
@@ -148,5 +149,3 @@
     <script src="./app.js"></script>
   </body>
 </html>
-
-

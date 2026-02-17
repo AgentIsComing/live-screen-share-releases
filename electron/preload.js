@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('desktopApp', {
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   registerJoinCode: (payload) => ipcRenderer.invoke('register-join-code', payload),
   resolveJoinCode: (payload) => ipcRenderer.invoke('resolve-join-code', payload),
+  registerRoomAccess: (payload) => ipcRenderer.invoke('register-room-access', payload),
+  resolveRoomAccess: (payload) => ipcRenderer.invoke('resolve-room-access', payload),
   startBackend: () => ipcRenderer.invoke('start-backend'),
   stopBackend: () => ipcRenderer.invoke('stop-backend'),
   getBackendStatus: () => ipcRenderer.invoke('backend-status'),
@@ -21,4 +23,5 @@ contextBridge.exposeInMainWorld('desktopApp', {
     return () => ipcRenderer.removeListener('backend-status', handler);
   }
 });
+
 

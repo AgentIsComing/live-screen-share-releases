@@ -97,6 +97,14 @@ function writeTunnelInfo(url) {
   );
 }
 
+function normalizeWsUrl(value) {
+  const wsUrl = String(value || '').trim();
+  if (!/^wss?:\/\//i.test(wsUrl)) {
+    throw new Error('Signaling URL must start with ws:// or wss://');
+  }
+  return wsUrl;
+}
+
 function normalizeServiceBaseUrl(value) {
   const base = String(value || '').trim().replace(/\/+$/, '');
   if (!base) {
@@ -149,7 +157,16 @@ function setupAutoUpdater() {
   autoUpdater.on('checking-for-update', () => sendUpdaterStatus('Checking for updates...'));
   autoUpdater.on('update-available', () => sendUpdaterStatus('Update available. Downloading...'));
   autoUpdater.on('update-not-available', () => sendUpdaterStatus('App is up to date.'));
-  autoUpdater.on('update-downloaded', () => sendUpdaterStatus('Update downloaded. Restart app to apply.'));
+  autoUpdater.on('update-downloaded', () => {
+    sendUpdaterStatus('Update downloaded. Restarting app to apply update...');
+    setTimeout(() => {
+      try {
+        autoUpdater.quitAndInstall(false, true);
+      } catch (error) {
+        sendUpdaterStatus(`Auto-restart failed: ${error.message}`);
+      }
+    }, 2500);
+  });
   autoUpdater.on('error', (err) => sendUpdaterStatus(`Update error: ${err.message}`));
 
   setTimeout(() => {
@@ -396,6 +413,51 @@ ipcMain.handle('resolve-join-code', async (_event, payload = {}) => {
     return { ok: false, error: error.message };
   }
 });
+ipcMain.handle('register-room-access', async (_event, payload = {}) => {
+  try {
+    const baseUrl = normalizeServiceBaseUrl(payload.baseUrl);
+    const roomId = normalizeRoomId(payload.roomId);
+    const password = normalizePassword(payload.password);
+    const wsUrl = normalizeWsUrl(payload.wsUrl || '');
+    const ttlSeconds = Number(payload.ttlSeconds || 900);
+
+    const result = await callCodeService(baseUrl, '/register-room', {
+      roomId,
+      password,
+      wsUrl,
+      ttlSeconds
+    });
+
+    return {
+      ok: true,
+      roomId: result.roomId || roomId,
+      expiresAt: result.expiresAt || null
+    };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle('resolve-room-access', async (_event, payload = {}) => {
+  try {
+    const baseUrl = normalizeServiceBaseUrl(payload.baseUrl);
+    const roomId = normalizeRoomId(payload.roomId);
+    const password = normalizePassword(payload.password);
+
+    const result = await callCodeService(baseUrl, '/resolve-room', {
+      roomId,
+      password
+    });
+
+    return {
+      ok: true,
+      roomId: result.roomId || roomId,
+      wsUrl: result.wsUrl
+    };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
 ipcMain.handle('start-backend', async () => {
   try {
     backendState.lastError = null;
@@ -444,5 +506,9 @@ ipcMain.handle('check-for-updates', async () => {
     return { ok: false, error: error.message };
   }
 });
+
+
+
+
 
 

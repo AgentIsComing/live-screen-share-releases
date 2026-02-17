@@ -32,18 +32,37 @@ function normalizeWsUrl(value) {
   return url;
 }
 
+function normalizeRoomId(value) {
+  const roomId = String(value || '').trim();
+  if (!roomId) {
+    throw new Error('roomId is required');
+  }
+  return roomId;
+}
+
+function normalizePassword(value) {
+  const password = String(value || '');
+  if (!password || password.length < 4) {
+    throw new Error('password must be at least 4 characters');
+  }
+  return password;
+}
+
+function computeTtlSeconds(env, requested) {
+  const ttlFromBody = Number(requested || 0);
+  const fallbackTtl = Number(env.DEFAULT_TTL_SECONDS || 900);
+  return Math.min(Math.max(ttlFromBody || fallbackTtl, 60), 3600);
+}
+
 async function registerCode(env, body) {
   const wsUrl = normalizeWsUrl(body.wsUrl);
   const roomId = String(body.roomId || '').trim();
-
-  const ttlFromBody = Number(body.ttlSeconds || 0);
-  const fallbackTtl = Number(env.DEFAULT_TTL_SECONDS || 900);
-  const ttlSeconds = Math.min(Math.max(ttlFromBody || fallbackTtl, 60), 3600);
+  const ttlSeconds = computeTtlSeconds(env, body.ttlSeconds);
 
   let code = null;
   for (let i = 0; i < 30; i += 1) {
     const candidate = randomCode();
-    const existing = await env.JOIN_CODES.get(candidate);
+    const existing = await env.JOIN_CODES.get(`code:${candidate}`);
     if (!existing) {
       code = candidate;
       break;
@@ -56,7 +75,7 @@ async function registerCode(env, body) {
 
   const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
   await env.JOIN_CODES.put(
-    code,
+    `code:${code}`,
     JSON.stringify({ wsUrl, roomId, expiresAt }),
     { expirationTtl: ttlSeconds }
   );
@@ -70,7 +89,7 @@ async function resolveCode(env, body) {
     return badRequest('code must be exactly 5 digits');
   }
 
-  const raw = await env.JOIN_CODES.get(code);
+  const raw = await env.JOIN_CODES.get(`code:${code}`);
   if (!raw) {
     return json({ ok: false, error: 'Code not found or expired' }, 404);
   }
@@ -87,6 +106,50 @@ async function resolveCode(env, body) {
     code,
     wsUrl: parsed.wsUrl,
     roomId: parsed.roomId || null,
+    expiresAt: parsed.expiresAt || null
+  });
+}
+
+async function registerRoom(env, body) {
+  const roomId = normalizeRoomId(body.roomId);
+  const password = normalizePassword(body.password);
+  const wsUrl = normalizeWsUrl(body.wsUrl);
+  const ttlSeconds = computeTtlSeconds(env, body.ttlSeconds);
+  const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
+
+  await env.JOIN_CODES.put(
+    `room:${roomId.toLowerCase()}`,
+    JSON.stringify({ roomId, password, wsUrl, expiresAt }),
+    { expirationTtl: ttlSeconds }
+  );
+
+  return json({ ok: true, roomId, wsUrl, expiresAt, ttlSeconds });
+}
+
+async function resolveRoom(env, body) {
+  const roomId = normalizeRoomId(body.roomId);
+  const password = normalizePassword(body.password);
+
+  const raw = await env.JOIN_CODES.get(`room:${roomId.toLowerCase()}`);
+  if (!raw) {
+    return json({ ok: false, error: 'Room not found or expired' }, 404);
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return json({ ok: false, error: 'Stored room is invalid' }, 500);
+  }
+
+  if (parsed.password !== password) {
+    return json({ ok: false, error: 'Invalid room password' }, 401);
+  }
+
+  return json({
+    ok: true,
+    roomId: parsed.roomId || roomId,
+    wsUrl: parsed.wsUrl,
     expiresAt: parsed.expiresAt || null
   });
 }
@@ -114,14 +177,26 @@ export default {
       return badRequest('Invalid JSON body');
     }
 
-    if (url.pathname === '/register') {
-      return registerCode(env, body);
-    }
+    try {
+      if (url.pathname === '/register') {
+        return registerCode(env, body);
+      }
 
-    if (url.pathname === '/resolve') {
-      return resolveCode(env, body);
-    }
+      if (url.pathname === '/resolve') {
+        return resolveCode(env, body);
+      }
 
-    return json({ ok: false, error: 'Not found' }, 404);
+      if (url.pathname === '/register-room') {
+        return registerRoom(env, body);
+      }
+
+      if (url.pathname === '/resolve-room') {
+        return resolveRoom(env, body);
+      }
+
+      return json({ ok: false, error: 'Not found' }, 404);
+    } catch (error) {
+      return badRequest(error.message || 'Invalid request');
+    }
   }
 };
