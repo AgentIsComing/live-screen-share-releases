@@ -145,3 +145,38 @@ Use the `Check app updates` button in the app to force a check.
 ### Notes
 - Auto-update works from installed NSIS builds, not from portable zip builds.
 - Keep release assets public for tokenless client updates.
+## 5-digit Join Codes (Cloudflare Worker)
+You can now join by short code instead of sharing the full signaling URL.
+
+### Deploy the code service once
+1. Authenticate Wrangler:
+```bash
+npx wrangler whoami
+```
+If not logged in:
+```bash
+npx wrangler login
+```
+
+2. Create KV namespace for codes:
+```bash
+npm run code-service:kv:create
+```
+
+3. Open `cloudflare/join-code-service/wrangler.toml` and paste the KV `id` and `preview_id`.
+
+4. Deploy Worker:
+```bash
+npm run code-service:deploy
+```
+
+5. Copy Worker URL (example `https://live-screen-share-code-service.<subdomain>.workers.dev`).
+
+### Use in the app
+1. On both host and viewer apps, set `Code service URL` to your Worker URL.
+2. Host clicks `Start backend (signal+tunnel)`.
+3. Host clicks `Generate code (host)` and sends the 5-digit code.
+4. Viewer enters code and clicks `Use code (viewer)`.
+5. Viewer clicks `Connect as viewer`.
+
+Code entries expire automatically (default ~15 minutes).

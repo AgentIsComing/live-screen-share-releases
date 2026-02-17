@@ -97,6 +97,47 @@ function writeTunnelInfo(url) {
   );
 }
 
+function normalizeServiceBaseUrl(value) {
+  const base = String(value || '').trim().replace(/\/+$/, '');
+  if (!base) {
+    throw new Error('Code service URL is required.');
+  }
+  if (!/^https?:\/\//i.test(base)) {
+    throw new Error('Code service URL must start with http:// or https://');
+  }
+  return base;
+}
+
+function normalizeJoinCode(value) {
+  const code = String(value || '').trim();
+  if (!/^\d{5}$/.test(code)) {
+    throw new Error('Join code must be exactly 5 digits.');
+  }
+  return code;
+}
+
+async function callCodeService(baseUrl, route, body) {
+  const endpoint = `${normalizeServiceBaseUrl(baseUrl)}${route}`;
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    data = null;
+  }
+
+  if (!response.ok) {
+    const detail = data?.error || `${response.status} ${response.statusText}`;
+    throw new Error(`Code service request failed: ${detail}`);
+  }
+
+  return data;
+}
 function setupAutoUpdater() {
   if (!app.isPackaged || !autoUpdater) {
     return;
@@ -313,6 +354,48 @@ ipcMain.handle('get-tunnel-url', () => {
   }
 });
 
+ipcMain.handle('register-join-code', async (_event, payload = {}) => {
+  try {
+    const baseUrl = normalizeServiceBaseUrl(payload.baseUrl);
+    const wsUrl = String(payload.wsUrl || '').trim();
+    const roomId = String(payload.roomId || '').trim();
+
+    if (!/^wss?:\/\//i.test(wsUrl)) {
+      throw new Error('A valid signaling URL is required before generating a join code.');
+    }
+
+    const result = await callCodeService(baseUrl, '/register', {
+      wsUrl,
+      roomId,
+      ttlSeconds: 900
+    });
+
+    return {
+      ok: true,
+      code: result.code,
+      expiresAt: result.expiresAt || null
+    };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle('resolve-join-code', async (_event, payload = {}) => {
+  try {
+    const baseUrl = normalizeServiceBaseUrl(payload.baseUrl);
+    const code = normalizeJoinCode(payload.code);
+
+    const result = await callCodeService(baseUrl, '/resolve', { code });
+
+    return {
+      ok: true,
+      wsUrl: result.wsUrl,
+      roomId: result.roomId || null
+    };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
 ipcMain.handle('start-backend', async () => {
   try {
     backendState.lastError = null;
@@ -361,3 +444,5 @@ ipcMain.handle('check-for-updates', async () => {
     return { ok: false, error: error.message };
   }
 });
+
+

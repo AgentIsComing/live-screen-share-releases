@@ -16,7 +16,10 @@
     "dist:dir": "set \"ELECTRON_RUN_AS_NODE=\" && electron-builder --win dir",
     "build:installer": "set \"ELECTRON_RUN_AS_NODE=\" && electron-builder --win nsis --publish never",
     "release:public": "set \"ELECTRON_RUN_AS_NODE=\" && electron-builder --win nsis --publish always --config.directories.output=dist-release",
-    "release": "powershell -ExecutionPolicy Bypass -File ./scripts/release.ps1"
+    "release": "powershell -ExecutionPolicy Bypass -File ./scripts/release.ps1",
+    "code-service:kv:create": "npx wrangler kv namespace create JOIN_CODES --config cloudflare/join-code-service/wrangler.toml",
+    "code-service:deploy": "npx wrangler deploy --config cloudflare/join-code-service/wrangler.toml",
+    "code-service:dev": "npx wrangler dev --remote --config cloudflare/join-code-service/wrangler.toml"
   },
   "engines": {
     "node": ">=18"

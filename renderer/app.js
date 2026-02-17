@@ -6,6 +6,11 @@ const testSignalBtn = document.getElementById('testSignal');
 const checkUpdatesBtn = document.getElementById('checkUpdates');
 const startBackendBtn = document.getElementById('startBackend');
 const stopBackendBtn = document.getElementById('stopBackend');
+const codeServiceUrlEl = document.getElementById('codeServiceUrl');
+const joinCodeEl = document.getElementById('joinCode');
+const generateCodeBtn = document.getElementById('generateCode');
+const resolveCodeBtn = document.getElementById('resolveCode');
+const codeHintEl = document.getElementById('codeHint');
 const latencyProfileEl = document.getElementById('latencyProfile');
 const bitrateEl = document.getElementById('bitrate');
 const iceJsonEl = document.getElementById('iceJson');
@@ -40,7 +45,8 @@ const storageKeys = {
   signalUrl: 'lss.signalUrl',
   iceJson: 'lss.iceJson',
   bitrate: 'lss.bitrate',
-  latencyProfile: 'lss.latencyProfile'
+  latencyProfile: 'lss.latencyProfile',
+  codeServiceUrl: 'lss.codeServiceUrl'
 };
 
 let ws = null;
@@ -67,18 +73,25 @@ async function init() {
   iceJsonEl.value = localStorage.getItem(storageKeys.iceJson) || JSON.stringify(defaultIce);
   bitrateEl.value = localStorage.getItem(storageKeys.bitrate) || '2500000';
   latencyProfileEl.value = localStorage.getItem(storageKeys.latencyProfile) || 'ultra';
+  codeServiceUrlEl.value = localStorage.getItem(storageKeys.codeServiceUrl) || '';
+  codeHintEl.textContent = 'Host generates a code, viewer enters it.';
 
   mode = modeEl.value;
   syncModeUI();
 
   modeEl.addEventListener('change', onModeChange);
   videoSourceEl.addEventListener('change', syncHostSourceUI);
-  [roomEl, signalUrlEl, iceJsonEl, bitrateEl, latencyProfileEl].forEach((el) => el.addEventListener('change', persistInputs));
+  [roomEl, signalUrlEl, iceJsonEl, bitrateEl, latencyProfileEl, codeServiceUrlEl].forEach((el) => el.addEventListener('change', persistInputs));
+  joinCodeEl.addEventListener('input', () => {
+    joinCodeEl.value = joinCodeEl.value.replace(/\D/g, '').slice(0, 5);
+  });
   autoTunnelBtn.addEventListener('click', () => autoFillTunnelUrl(false));
   testSignalBtn.addEventListener('click', testSignalingEndpoint);
   checkUpdatesBtn.addEventListener('click', manualCheckForUpdates);
   startBackendBtn.addEventListener('click', startBackendFromApp);
   stopBackendBtn.addEventListener('click', stopBackendFromApp);
+  generateCodeBtn.addEventListener('click', generateJoinCodeFromHost);
+  resolveCodeBtn.addEventListener('click', resolveJoinCodeForViewer);
 
   refreshDevicesBtn.addEventListener('click', refreshDevices);
   startHostBtn.addEventListener('click', startHost);
@@ -92,6 +105,8 @@ async function init() {
   setInterval(() => {
     autoFillTunnelUrl(true);
   }, 5000);
+  window.desktopApp.onBackendStatus(handleBackendStatus);
+  await refreshBackendState();
   connectSignaling();
 
   window.desktopApp.onUpdaterStatus((message) => {
@@ -105,6 +120,7 @@ function persistInputs() {
   localStorage.setItem(storageKeys.iceJson, iceJsonEl.value.trim());
   localStorage.setItem(storageKeys.bitrate, bitrateEl.value);
   localStorage.setItem(storageKeys.latencyProfile, latencyProfileEl.value);
+  localStorage.setItem(storageKeys.codeServiceUrl, codeServiceUrlEl.value.trim());
 }
 
 function onModeChange() {
@@ -183,6 +199,83 @@ async function stopBackendFromApp() {
   await window.desktopApp.stopBackend();
   handleBackendStatus({ signalRunning: false, tunnelRunning: false, message: 'Backend stopped.' });
 }
+
+async function generateJoinCodeFromHost() {
+  if (mode !== 'host') {
+    setStatus('Switch mode to host to generate a join code.');
+    return;
+  }
+
+  const baseUrl = codeServiceUrlEl.value.trim();
+  const wsUrl = normalizeSignalUrl(signalUrlEl.value.trim());
+
+  if (!baseUrl) {
+    setStatus('Set Code service URL first.');
+    return;
+  }
+
+  if (!wsUrl || !/^wss?:\/\//i.test(wsUrl)) {
+    setStatus('Set a valid signaling URL before generating a code.');
+    return;
+  }
+
+  persistInputs();
+  setStatus('Generating 5-digit join code...');
+
+  const result = await window.desktopApp.registerJoinCode({
+    baseUrl,
+    wsUrl,
+    roomId: currentRoomId()
+  });
+
+  if (!result.ok) {
+    setStatus(`Join code generation failed: ${result.error}`);
+    return;
+  }
+
+  joinCodeEl.value = result.code;
+  codeHintEl.textContent = result.expiresAt
+    ? `Code ${result.code} expires at ${new Date(result.expiresAt).toLocaleTimeString()}`
+    : `Code ${result.code} generated.`;
+  setStatus(`Join code ready: ${result.code}`);
+}
+
+async function resolveJoinCodeForViewer() {
+  if (mode !== 'viewer') {
+    setStatus('Switch mode to viewer to use a join code.');
+    return;
+  }
+
+  const baseUrl = codeServiceUrlEl.value.trim();
+  const code = joinCodeEl.value.trim();
+
+  if (!baseUrl) {
+    setStatus('Set Code service URL first.');
+    return;
+  }
+
+  if (!/^\d{5}$/.test(code)) {
+    setStatus('Enter a 5-digit join code.');
+    return;
+  }
+
+  persistInputs();
+  setStatus(`Resolving join code ${code}...`);
+
+  const result = await window.desktopApp.resolveJoinCode({ baseUrl, code });
+  if (!result.ok) {
+    setStatus(`Join code failed: ${result.error}`);
+    return;
+  }
+
+  signalUrlEl.value = normalizeSignalUrl(result.wsUrl);
+  if (result.roomId) {
+    roomEl.value = result.roomId;
+  }
+  persistInputs();
+  reconnectSignaling();
+  setStatus(`Join code resolved. Connected to room ${roomEl.value.trim()}.`);
+}
 function normalizeSignalUrl(value) {
   const trimmed = (value || '').trim();
   if (!trimmed) return '';
@@ -242,7 +335,7 @@ async function testSignalingEndpoint() {
 async function autoFillTunnelUrl(silent) {
   const tunnelWs = normalizeSignalUrl(await window.desktopApp.getTunnelUrl());
   if (!tunnelWs) {
-    if (!silent) setStatus('No active tunnel URL found. Start `npm run start:public-signal` first.');
+    if (!silent) setStatus('No active tunnel URL found. Start backend (signal+tunnel) first.');
     return;
   }
 
@@ -833,6 +926,17 @@ function tuneReceiversForLatency(peer) {
     }
   }
 }
+
+
+
+
+
+
+
+
+
+
+
 
 
 

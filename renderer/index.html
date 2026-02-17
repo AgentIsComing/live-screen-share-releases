@@ -44,7 +44,21 @@
             <button id="checkUpdates" type="button">Check app updates</button>
           </label>
 
-          
+          <label>
+            Code service URL (Cloudflare Worker)
+            <input id="codeServiceUrl" type="text" placeholder="https://live-screen-share-code-service.<subdomain>.workers.dev" />
+          </label>
+
+          <label>
+            Join code
+            <div class="row">
+              <input id="joinCode" type="text" inputmode="numeric" maxlength="5" placeholder="12345" />
+              <button id="generateCode" type="button">Generate code (host)</button>
+              <button id="resolveCode" type="button">Use code (viewer)</button>
+            </div>
+            <small id="codeHint">Host generates a code, viewer enters it.</small>
+          </label>
+
           <label>
             Latency profile
             <select id="latencyProfile">
@@ -134,4 +148,5 @@
     <script src="./app.js"></script>
   </body>
 </html>
+
 

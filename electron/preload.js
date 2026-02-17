@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('desktopApp', {
   listDesktopSources: () => ipcRenderer.invoke('list-desktop-sources'),
   getTunnelUrl: () => ipcRenderer.invoke('get-tunnel-url'),
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  registerJoinCode: (payload) => ipcRenderer.invoke('register-join-code', payload),
+  resolveJoinCode: (payload) => ipcRenderer.invoke('resolve-join-code', payload),
   startBackend: () => ipcRenderer.invoke('start-backend'),
   stopBackend: () => ipcRenderer.invoke('stop-backend'),
   getBackendStatus: () => ipcRenderer.invoke('backend-status'),
@@ -19,3 +21,4 @@ contextBridge.exposeInMainWorld('desktopApp', {
     return () => ipcRenderer.removeListener('backend-status', handler);
   }
 });
+
