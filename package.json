@@ -45,7 +45,6 @@
       "server.js",
       "package.json",
       "runtime/**/*",
-      "tools/**/*",
       "assets/**/*"
     ],
     "win": {
@@ -71,6 +70,12 @@
         "repo": "${env.RELEASE_REPO}",
         "private": false,
         "releaseType": "release"
+      }
+    ],
+    "extraResources": [
+      {
+        "to": "tools/cloudflared.exe",
+        "from": "tools/cloudflared.exe"
       }
     ]
   },

@@ -10,8 +10,15 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const projectRoot = path.join(__dirname, '..');
-const tunnelInfoPath = path.join(projectRoot, 'runtime', 'tunnel-info.json');
-const cloudflaredPath = path.join(projectRoot, 'tools', 'cloudflared.exe');
+const runtimeDir = path.join(app.getPath('userData'), 'runtime');
+const tunnelInfoPath = path.join(runtimeDir, 'tunnel-info.json');
+const serverEntry = app.isPackaged
+  ? path.join(process.resourcesPath, 'app.asar', 'server.js')
+  : path.join(projectRoot, 'server.js');
+const cloudflaredPath = app.isPackaged
+  ? path.join(process.resourcesPath, 'tools', 'cloudflared.exe')
+  : path.join(projectRoot, 'tools', 'cloudflared.exe');
+const backendCwd = app.isPackaged ? process.resourcesPath : projectRoot;
 
 const backendState = {
   signalRunning: false,
@@ -113,14 +120,19 @@ function setupAutoUpdater() {
 
 function startSignalServer() {
   let reuseExternalSignal = false;
+
   if (signalProc && !signalProc.killed) {
     backendState.signalRunning = true;
     backendState.signalPid = signalProc.pid || null;
     return;
   }
 
-  signalProc = spawn(process.execPath, ['server.js'], {
-    cwd: projectRoot,
+  signalProc = spawn(process.execPath, [serverEntry], {
+    cwd: backendCwd,
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: '1'
+    },
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -139,7 +151,9 @@ function startSignalServer() {
   signalProc.stderr.on('data', (chunk) => {
     const text = chunk.toString();
     if (text.includes('EADDRINUSE')) {
+      reuseExternalSignal = true;
       backendState.signalRunning = true;
+      backendState.signalPid = null;
       backendState.lastError = 'Port 3000 already in use (reusing existing signaling server).';
       emitBackendStatus(backendState.lastError);
       return;
@@ -149,8 +163,22 @@ function startSignalServer() {
     emitBackendStatus(`Signal error: ${backendState.lastError}`);
   });
 
+  signalProc.on('error', (error) => {
+    backendState.signalRunning = false;
+    backendState.signalPid = null;
+    backendState.lastError = `Signal spawn failed: ${error.message}`;
+    emitBackendStatus(backendState.lastError);
+  });
+
   signalProc.on('exit', () => {
     signalProc = null;
+    if (reuseExternalSignal) {
+      backendState.signalRunning = true;
+      backendState.signalPid = null;
+      emitBackendStatus('Using existing signaling server on port 3000.');
+      return;
+    }
+
     backendState.signalRunning = false;
     backendState.signalPid = null;
     emitBackendStatus('Signaling server stopped.');
@@ -171,7 +199,7 @@ function startTunnel() {
   }
 
   tunnelProc = spawn(cloudflaredPath, ['tunnel', '--url', 'http://localhost:3000'], {
-    cwd: projectRoot,
+    cwd: backendCwd,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -196,6 +224,13 @@ function startTunnel() {
 
   tunnelProc.stdout.on('data', handleChunk);
   tunnelProc.stderr.on('data', handleChunk);
+
+  tunnelProc.on('error', (error) => {
+    backendState.tunnelRunning = false;
+    backendState.tunnelPid = null;
+    backendState.lastError = `Tunnel spawn failed: ${error.message}`;
+    emitBackendStatus(backendState.lastError);
+  });
 
   tunnelProc.on('exit', () => {
     tunnelProc = null;
@@ -326,4 +361,3 @@ ipcMain.handle('check-for-updates', async () => {
     return { ok: false, error: error.message };
   }
 });
-
