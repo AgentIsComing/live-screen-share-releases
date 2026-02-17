@@ -754,7 +754,12 @@ async function startViewer() {
   pc = makePeerConnection();
   if (!pc) return;
 
-  const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true, voiceActivityDetection: false });
+  // Explicit recvonly transceivers are more reliable than offerToReceive* on modern Chromium/WebRTC.
+  pc.addTransceiver('video', { direction: 'recvonly' });
+  pc.addTransceiver('audio', { direction: 'recvonly' });
+
+  setStatus('Connecting to host stream...');
+  const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
 
   ws.send(JSON.stringify({
@@ -873,4 +878,5 @@ function tuneReceiversForLatency(peer) {
     }
   }
 }
+
 
