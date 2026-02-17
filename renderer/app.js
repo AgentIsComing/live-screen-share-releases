@@ -108,12 +108,15 @@ async function init() {
   });
 
   videoSourceEl.addEventListener('change', syncHostSourceUI);
-  refreshDevicesBtn.addEventListener('click', refreshDevices);
+  refreshDevicesBtn.addEventListener('click', () => {
+    refreshDevices(true).catch((error) => setStatus('Refresh devices failed: ' + (error?.message || error)));
+  });
   startHostBtn.addEventListener('click', startHostWithPrompt);
   stopHostBtn.addEventListener('click', () => stopHost(true));
-
-  await refreshDevices();
   syncHostSourceUI();
+  setTimeout(() => {
+    refreshDevices(false).catch((error) => setStatus('Refresh devices failed: ' + (error?.message || error)));
+  }, 0);
 
   window.desktopApp.onBackendStatus(handleBackendStatus);
   await refreshBackendState();
@@ -475,11 +478,13 @@ async function connectViewerByRoomPassword() {
   }
 }
 
-async function refreshDevices() {
-  try {
-    const temp = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-    temp.getTracks().forEach((t) => t.stop());
-  } catch {}
+async function refreshDevices(requestPermissions = false) {
+  if (requestPermissions) {
+    try {
+      const temp = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+      temp.getTracks().forEach((t) => t.stop());
+    } catch {}
+  }
 
   const [devices, desktopSources] = await Promise.all([
     navigator.mediaDevices.enumerateDevices(),
@@ -527,7 +532,6 @@ async function refreshDevices() {
     audioDeviceEl.appendChild(option);
   }
 }
-
 function makePeerConnection() {
   const config = rtcConfig();
   if (!config) return null;
@@ -878,5 +882,4 @@ function tuneReceiversForLatency(peer) {
     }
   }
 }
-
 
