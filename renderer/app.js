@@ -6,9 +6,19 @@ const viewerFormEl = document.getElementById('viewerForm');
 
 const codeServiceWrapEl = document.getElementById('codeServiceWrap');
 const codeServiceUrlEl = document.getElementById('codeServiceUrl');
+const connectivityWrapEl = document.getElementById('connectivityWrap');
+const latencyWrapEl = document.getElementById('latencyWrap');
+const bitrateWrapEl = document.getElementById('bitrateWrap');
+
 const startBackendBtn = document.getElementById('startBackend');
 const stopBackendBtn = document.getElementById('stopBackend');
 const checkUpdatesBtn = document.getElementById('checkUpdates');
+
+const hostStartModalEl = document.getElementById('hostStartModal');
+const hostModalRoomIdEl = document.getElementById('hostModalRoomId');
+const hostModalPasswordEl = document.getElementById('hostModalPassword');
+const hostModalConfirmBtn = document.getElementById('hostModalConfirm');
+const hostModalCancelBtn = document.getElementById('hostModalCancel');
 
 const statusEl = document.getElementById('status');
 const updateStatusEl = document.getElementById('updateStatus');
@@ -26,12 +36,8 @@ const refreshDevicesBtn = document.getElementById('refreshDevices');
 const startHostBtn = document.getElementById('startHost');
 const stopHostBtn = document.getElementById('stopHost');
 
-const startViewerBtn = document.getElementById('startViewer');
-const stopViewerBtn = document.getElementById('stopViewer');
-
 const bitrateEl = document.getElementById('bitrate');
 const latencyProfileEl = document.getElementById('latencyProfile');
-const iceJsonEl = document.getElementById('iceJson');
 const videoEl = document.getElementById('video');
 
 const DEFAULT_CODE_SERVICE_URL = 'https://live-screen-share-code-service.jaydenrmaine.workers.dev';
@@ -40,11 +46,10 @@ const storageKeys = {
   mode: 'lss.mode',
   codeServiceUrl: 'lss.codeServiceUrl',
   bitrate: 'lss.bitrate',
-  latencyProfile: 'lss.latencyProfile',
-  iceJson: 'lss.iceJson'
+  latencyProfile: 'lss.latencyProfile'
 };
 
-const defaultIce = [
+const backendIceServers = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' }
 ];
@@ -74,13 +79,12 @@ async function init() {
   codeServiceUrlEl.value = localStorage.getItem(storageKeys.codeServiceUrl) || DEFAULT_CODE_SERVICE_URL;
   bitrateEl.value = localStorage.getItem(storageKeys.bitrate) || '2500000';
   latencyProfileEl.value = localStorage.getItem(storageKeys.latencyProfile) || 'ultra';
-  iceJsonEl.value = localStorage.getItem(storageKeys.iceJson) || JSON.stringify(defaultIce);
 
   mode = modeEl.value;
   syncModeUI();
 
   modeEl.addEventListener('change', onModeChange);
-  [codeServiceUrlEl, bitrateEl, latencyProfileEl, iceJsonEl].forEach((el) => {
+  [codeServiceUrlEl, bitrateEl, latencyProfileEl].forEach((el) => {
     el.addEventListener('change', persistInputs);
   });
 
@@ -90,12 +94,13 @@ async function init() {
 
   connectRoomBtn.addEventListener('click', connectViewerByRoomPassword);
 
+  hostModalConfirmBtn.addEventListener('click', confirmHostStartFromModal);
+  hostModalCancelBtn.addEventListener('click', closeHostStartModal);
+
   videoSourceEl.addEventListener('change', syncHostSourceUI);
   refreshDevicesBtn.addEventListener('click', refreshDevices);
   startHostBtn.addEventListener('click', startHostWithPrompt);
   stopHostBtn.addEventListener('click', () => stopHost(true));
-  startViewerBtn.addEventListener('click', startViewer);
-  stopViewerBtn.addEventListener('click', stopViewer);
 
   await refreshDevices();
   syncHostSourceUI();
@@ -113,7 +118,6 @@ function persistInputs() {
   localStorage.setItem(storageKeys.codeServiceUrl, codeServiceUrlEl.value.trim());
   localStorage.setItem(storageKeys.bitrate, bitrateEl.value);
   localStorage.setItem(storageKeys.latencyProfile, latencyProfileEl.value);
-  localStorage.setItem(storageKeys.iceJson, iceJsonEl.value.trim());
 }
 
 function onModeChange() {
@@ -129,14 +133,13 @@ function syncModeUI() {
   const isHost = mode === 'host';
   hostPanel.classList.toggle('hidden', !isHost);
   viewerPanel.classList.toggle('hidden', isHost);
+
+  modeEl.parentElement.classList.toggle('hidden', !isHost);
   codeServiceWrapEl.classList.toggle('hidden', !isHost);
-  startBackendBtn.classList.toggle('hidden', !isHost);
-  stopBackendBtn.classList.toggle('hidden', !isHost);
-  if (!isHost) {
-    checkUpdatesBtn.classList.add('hidden');
-  } else {
-    checkUpdatesBtn.classList.remove('hidden');
-  }
+  connectivityWrapEl.classList.toggle('hidden', !isHost);
+  latencyWrapEl.classList.toggle('hidden', !isHost);
+  bitrateWrapEl.classList.toggle('hidden', !isHost);
+
   videoEl.muted = isHost;
 }
 
@@ -229,22 +232,9 @@ function normalizeSignalUrl(value) {
   return trimmed;
 }
 
-function parseIceServers() {
-  try {
-    const parsed = JSON.parse(iceJsonEl.value.trim());
-    if (!Array.isArray(parsed)) throw new Error('ICE servers must be an array');
-    return parsed;
-  } catch (error) {
-    setStatus('Invalid ICE JSON: ' + error.message);
-    return null;
-  }
-}
-
 function rtcConfig() {
-  const iceServers = parseIceServers();
-  if (!iceServers) return null;
   return {
-    iceServers,
+    iceServers: backendIceServers,
     bundlePolicy: 'max-bundle',
     iceCandidatePoolSize: 10
   };
@@ -351,21 +341,41 @@ async function waitForSignalingJoin(timeoutMs = 10000) {
   return false;
 }
 
+function openHostStartModal() {
+  hostModalRoomIdEl.value = '';
+  hostModalPasswordEl.value = '';
+  hostStartModalEl.classList.remove('hidden');
+  hostModalRoomIdEl.focus();
+}
+
+function closeHostStartModal() {
+  hostStartModalEl.classList.add('hidden');
+}
+
 async function startHostWithPrompt() {
   if (mode !== 'host') {
     setStatus('Switch mode to host first.');
     return;
   }
+  openHostStartModal();
+}
 
-  const promptedRoomId = window.prompt('Enter Room ID');
-  if (!promptedRoomId) return;
-  const promptedPassword = window.prompt('Enter Room Password (at least 4 chars)');
+async function confirmHostStartFromModal() {
+  const promptedRoomId = hostModalRoomIdEl.value.trim();
+  const promptedPassword = hostModalPasswordEl.value;
+
+  if (!promptedRoomId) {
+    setStatus('Room ID is required.');
+    return;
+  }
+
   if (!promptedPassword || promptedPassword.length < 4) {
     setStatus('Password must be at least 4 characters.');
     return;
   }
 
-  roomId = promptedRoomId.trim();
+  closeHostStartModal();
+  roomId = promptedRoomId;
   roomPassword = promptedPassword;
 
   if (!backendRunning) {
@@ -535,14 +545,6 @@ function makePeerConnection() {
     }
     if (state === 'failed' || state === 'disconnected') {
       setStatus('Peer connection dropped.');
-      if (mode === 'viewer') {
-        startViewerBtn.disabled = false;
-        stopViewerBtn.disabled = true;
-      }
-      if (mode === 'host') {
-        startHostBtn.disabled = false;
-        stopHostBtn.disabled = true;
-      }
     }
   };
 
@@ -750,16 +752,11 @@ async function startViewer() {
       offer
     }
   }));
-
-  startViewerBtn.disabled = true;
-  stopViewerBtn.disabled = false;
 }
 
 function stopViewer() {
   resetPeer();
   videoEl.srcObject = null;
-  startViewerBtn.disabled = !hostAvailable;
-  stopViewerBtn.disabled = true;
 }
 
 async function handleSignal(data) {

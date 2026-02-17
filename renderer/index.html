@@ -11,8 +11,8 @@
       <section class="card">
         <h1>Live Screen Share Desktop</h1>
 
-        <div class="grid two">
-          <label>
+        <div id="sharedControls" class="grid two">
+          <label id="modeWrap">
             Mode
             <select id="mode">
               <option value="host">Host</option>
@@ -25,14 +25,14 @@
             <input id="codeServiceUrl" type="text" placeholder="https://live-screen-share-code-service.jaydenrmaine.workers.dev" />
           </label>
 
-          <label>
+          <label id="connectivityWrap">
             Connectivity
             <button id="startBackend" type="button">Start backend</button>
             <button id="stopBackend" type="button" class="danger" disabled>Stop backend</button>
             <button id="checkUpdates" type="button">Check app updates</button>
           </label>
 
-          <label>
+          <label id="latencyWrap">
             Latency profile
             <select id="latencyProfile">
               <option value="ultra">Ultra (lowest delay)</option>
@@ -41,7 +41,7 @@
             </select>
           </label>
 
-          <label>
+          <label id="bitrateWrap">
             Max video bitrate
             <select id="bitrate">
               <option value="2500000">2.5 Mbps</option>
@@ -52,11 +52,6 @@
             </select>
           </label>
         </div>
-
-        <label>
-          ICE servers (JSON)
-          <textarea id="iceJson" rows="4"></textarea>
-        </label>
 
         <div id="hostPanel">
           <div class="grid two">
@@ -115,10 +110,6 @@
               <button id="joinRoom" type="button">Connect</button>
             </div>
           </div>
-          <div class="row hidden">
-            <button id="startViewer">Connect as viewer</button>
-            <button id="stopViewer" class="danger" disabled>Disconnect</button>
-          </div>
         </div>
 
         <p id="status" class="status"></p>
@@ -131,6 +122,24 @@
         <video id="video" autoplay playsinline controls></video>
       </section>
     </main>
+
+    <div id="hostStartModal" class="modal hidden">
+      <div class="modal-card">
+        <h2>Start Hosting</h2>
+        <label>
+          Room ID
+          <input id="hostModalRoomId" type="text" placeholder="Enter room ID" />
+        </label>
+        <label>
+          Room password
+          <input id="hostModalPassword" type="password" placeholder="At least 4 characters" />
+        </label>
+        <div class="row">
+          <button id="hostModalConfirm" type="button">Start now</button>
+          <button id="hostModalCancel" type="button" class="danger">Cancel</button>
+        </div>
+      </div>
+    </div>
 
     <script src="./app.js"></script>
   </body>
