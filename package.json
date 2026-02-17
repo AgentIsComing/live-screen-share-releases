@@ -1,6 +1,6 @@
 {
   "name": "live-screen-share",
-  "version": "2.0.13",
+  "version": "2.0.14",
   "private": true,
   "description": "Desktop low-latency screen sharing with OBS source and custom audio routing",
   "main": "electron/main.js",
