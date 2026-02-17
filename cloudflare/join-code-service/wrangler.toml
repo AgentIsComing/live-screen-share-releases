@@ -1,11 +1,12 @@
 name = "live-screen-share-code-service"
 main = "src/index.js"
 compatibility_date = "2026-02-17"
+account_id = "946c632e7fb9ca961f941dc21e76d4cc"
 
 [[kv_namespaces]]
 binding = "JOIN_CODES"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
-preview_id = "REPLACE_WITH_KV_PREVIEW_NAMESPACE_ID"
+id = "e91bf330b63b42b78538313a19f08569"
+preview_id = "e91bf330b63b42b78538313a19f08569"
 
 [vars]
 DEFAULT_TTL_SECONDS = "900"
