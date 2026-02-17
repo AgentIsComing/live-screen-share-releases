@@ -7,8 +7,24 @@ try {
 }
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 
-const tunnelInfoPath = path.join(__dirname, '..', 'runtime', 'tunnel-info.json');
+const projectRoot = path.join(__dirname, '..');
+const tunnelInfoPath = path.join(projectRoot, 'runtime', 'tunnel-info.json');
+const cloudflaredPath = path.join(projectRoot, 'tools', 'cloudflared.exe');
+
+const backendState = {
+  signalRunning: false,
+  tunnelRunning: false,
+  signalPid: null,
+  tunnelPid: null,
+  tunnelUrl: null,
+  wsUrl: null,
+  lastError: null
+};
+
+let signalProc = null;
+let tunnelProc = null;
 
 // WGC can freeze/fail on some Windows systems; force legacy desktop capturer path.
 if (app?.commandLine?.appendSwitch) {
@@ -30,14 +46,48 @@ function createWindow() {
     }
   });
 
-  win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  win.loadFile(path.join(projectRoot, 'renderer', 'index.html'));
+}
+
+function broadcast(channel, payload) {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win) {
+    win.webContents.send(channel, payload);
+  }
 }
 
 function sendUpdaterStatus(message) {
-  const win = BrowserWindow.getAllWindows()[0];
-  if (win) {
-    win.webContents.send('updater-status', message);
+  broadcast('updater-status', message);
+}
+
+function emitBackendStatus(extraMessage) {
+  const payload = {
+    ...backendState,
+    message: extraMessage || null
+  };
+  broadcast('backend-status', payload);
+}
+
+function safeUnlinkTunnelInfo() {
+  try {
+    if (fs.existsSync(tunnelInfoPath)) {
+      fs.unlinkSync(tunnelInfoPath);
+    }
+  } catch {
+    // ignore
   }
+}
+
+function writeTunnelInfo(url) {
+  const wsUrl = url.replace(/^https:/i, 'wss:') + '/signal';
+  backendState.tunnelUrl = url;
+  backendState.wsUrl = wsUrl;
+
+  fs.mkdirSync(path.dirname(tunnelInfoPath), { recursive: true });
+  fs.writeFileSync(
+    tunnelInfoPath,
+    JSON.stringify({ url, wsUrl, updatedAt: new Date().toISOString() }, null, 2)
+  );
 }
 
 function setupAutoUpdater() {
@@ -61,6 +111,127 @@ function setupAutoUpdater() {
   }, 3000);
 }
 
+function startSignalServer() {
+  let reuseExternalSignal = false;
+  if (signalProc && !signalProc.killed) {
+    backendState.signalRunning = true;
+    backendState.signalPid = signalProc.pid || null;
+    return;
+  }
+
+  signalProc = spawn(process.execPath, ['server.js'], {
+    cwd: projectRoot,
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  backendState.signalPid = signalProc.pid || null;
+  backendState.signalRunning = true;
+
+  signalProc.stdout.on('data', (chunk) => {
+    const text = chunk.toString();
+    if (text.includes('Signaling server listening')) {
+      backendState.signalRunning = true;
+      emitBackendStatus('Signaling server started.');
+    }
+  });
+
+  signalProc.stderr.on('data', (chunk) => {
+    const text = chunk.toString();
+    if (text.includes('EADDRINUSE')) {
+      backendState.signalRunning = true;
+      backendState.lastError = 'Port 3000 already in use (reusing existing signaling server).';
+      emitBackendStatus(backendState.lastError);
+      return;
+    }
+
+    backendState.lastError = text.trim();
+    emitBackendStatus(`Signal error: ${backendState.lastError}`);
+  });
+
+  signalProc.on('exit', () => {
+    signalProc = null;
+    backendState.signalRunning = false;
+    backendState.signalPid = null;
+    emitBackendStatus('Signaling server stopped.');
+  });
+}
+
+function startTunnel() {
+  if (tunnelProc && !tunnelProc.killed) {
+    backendState.tunnelRunning = true;
+    backendState.tunnelPid = tunnelProc.pid || null;
+    return;
+  }
+
+  if (!fs.existsSync(cloudflaredPath)) {
+    backendState.lastError = `cloudflared not found at ${cloudflaredPath}`;
+    emitBackendStatus(backendState.lastError);
+    throw new Error(backendState.lastError);
+  }
+
+  tunnelProc = spawn(cloudflaredPath, ['tunnel', '--url', 'http://localhost:3000'], {
+    cwd: projectRoot,
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  backendState.tunnelPid = tunnelProc.pid || null;
+  backendState.tunnelRunning = true;
+  const tryUrlRegex = /(https:\/\/[a-z0-9-]+\.trycloudflare\.com)/i;
+
+  function handleChunk(chunk) {
+    const text = chunk.toString();
+    const match = text.match(tryUrlRegex);
+    if (match && match[1]) {
+      writeTunnelInfo(match[1]);
+      emitBackendStatus(`Tunnel ready: ${backendState.wsUrl}`);
+    }
+
+    if (text.toLowerCase().includes('error')) {
+      backendState.lastError = text.trim();
+      emitBackendStatus(`Tunnel error: ${backendState.lastError}`);
+    }
+  }
+
+  tunnelProc.stdout.on('data', handleChunk);
+  tunnelProc.stderr.on('data', handleChunk);
+
+  tunnelProc.on('exit', () => {
+    tunnelProc = null;
+    backendState.tunnelRunning = false;
+    backendState.tunnelPid = null;
+    emitBackendStatus('Cloudflare tunnel stopped.');
+  });
+}
+
+function stopBackend() {
+  if (tunnelProc && !tunnelProc.killed) {
+    try {
+      tunnelProc.kill('SIGTERM');
+    } catch {
+      // ignore
+    }
+  }
+
+  if (signalProc && !signalProc.killed) {
+    try {
+      signalProc.kill('SIGTERM');
+    } catch {
+      // ignore
+    }
+  }
+
+  backendState.signalRunning = false;
+  backendState.tunnelRunning = false;
+  backendState.signalPid = null;
+  backendState.tunnelPid = null;
+  backendState.tunnelUrl = null;
+  backendState.wsUrl = null;
+  safeUnlinkTunnelInfo();
+  emitBackendStatus('Backend services stopped.');
+}
+
 app.whenReady().then(() => {
   setupAutoUpdater();
   createWindow();
@@ -70,6 +241,10 @@ app.whenReady().then(() => {
       createWindow();
     }
   });
+});
+
+app.on('before-quit', () => {
+  stopBackend();
 });
 
 app.on('window-all-closed', () => {
@@ -103,6 +278,42 @@ ipcMain.handle('get-tunnel-url', () => {
   }
 });
 
+ipcMain.handle('start-backend', async () => {
+  try {
+    backendState.lastError = null;
+    startSignalServer();
+    startTunnel();
+    emitBackendStatus('Starting signaling + tunnel...');
+    return { ok: true, ...backendState };
+  } catch (error) {
+    backendState.lastError = error.message;
+    emitBackendStatus(`Backend start failed: ${backendState.lastError}`);
+    return { ok: false, error: error.message, ...backendState };
+  }
+});
+
+ipcMain.handle('stop-backend', () => {
+  stopBackend();
+  return { ok: true, ...backendState };
+});
+
+ipcMain.handle('backend-status', () => {
+  try {
+    const wsUrl = fs.existsSync(tunnelInfoPath)
+      ? JSON.parse(fs.readFileSync(tunnelInfoPath, 'utf-8'))?.wsUrl || null
+      : null;
+
+    if (wsUrl) {
+      backendState.wsUrl = wsUrl;
+      backendState.tunnelUrl = wsUrl.replace(/^wss:/i, 'https:').replace(/\/signal$/, '');
+    }
+  } catch {
+    // ignore
+  }
+
+  return { ...backendState };
+});
+
 ipcMain.handle('check-for-updates', async () => {
   if (!app.isPackaged || !autoUpdater) {
     return { ok: false, error: 'Update checks run only in installed builds.' };
@@ -115,3 +326,4 @@ ipcMain.handle('check-for-updates', async () => {
     return { ok: false, error: error.message };
   }
 });
+

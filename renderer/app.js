@@ -4,6 +4,8 @@ const signalUrlEl = document.getElementById('signalUrl');
 const autoTunnelBtn = document.getElementById('autoTunnel');
 const testSignalBtn = document.getElementById('testSignal');
 const checkUpdatesBtn = document.getElementById('checkUpdates');
+const startBackendBtn = document.getElementById('startBackend');
+const stopBackendBtn = document.getElementById('stopBackend');
 const latencyProfileEl = document.getElementById('latencyProfile');
 const bitrateEl = document.getElementById('bitrate');
 const iceJsonEl = document.getElementById('iceJson');
@@ -75,6 +77,8 @@ async function init() {
   autoTunnelBtn.addEventListener('click', () => autoFillTunnelUrl(false));
   testSignalBtn.addEventListener('click', testSignalingEndpoint);
   checkUpdatesBtn.addEventListener('click', manualCheckForUpdates);
+  startBackendBtn.addEventListener('click', startBackendFromApp);
+  stopBackendBtn.addEventListener('click', stopBackendFromApp);
 
   refreshDevicesBtn.addEventListener('click', refreshDevices);
   startHostBtn.addEventListener('click', startHost);
@@ -132,6 +136,53 @@ function setStatus(text, options = {}) {
   console.log(`[status ${new Date().toISOString()}] ${text}`);
 }
 
+async function refreshBackendState() {
+  try {
+    const state = await window.desktopApp.getBackendStatus();
+    handleBackendStatus(state);
+  } catch (error) {
+    setStatus(`Backend status check failed: ${error.message}`);
+  }
+}
+
+function handleBackendStatus(state) {
+  const signalRunning = Boolean(state?.signalRunning);
+  const tunnelRunning = Boolean(state?.tunnelRunning);
+
+  startBackendBtn.disabled = signalRunning && tunnelRunning;
+  stopBackendBtn.disabled = !signalRunning && !tunnelRunning;
+
+  if (state?.wsUrl) {
+    lastAutoFilledTunnelUrl = state.wsUrl;
+  }
+
+  if (state?.message) {
+    setStatus(state.message);
+  }
+}
+
+async function startBackendFromApp() {
+  startBackendBtn.disabled = true;
+  setStatus('Starting local signaling and Cloudflare tunnel...');
+
+  const result = await window.desktopApp.startBackend();
+  handleBackendStatus(result);
+
+  if (!result.ok) {
+    setStatus(`Backend start failed: ${result.error}`);
+    return;
+  }
+
+  setTimeout(async () => {
+    await autoFillTunnelUrl(false);
+    reconnectSignaling();
+  }, 1200);
+}
+
+async function stopBackendFromApp() {
+  await window.desktopApp.stopBackend();
+  handleBackendStatus({ signalRunning: false, tunnelRunning: false, message: 'Backend stopped.' });
+}
 function normalizeSignalUrl(value) {
   const trimmed = (value || '').trim();
   if (!trimmed) return '';
@@ -782,3 +833,7 @@ function tuneReceiversForLatency(peer) {
     }
   }
 }
+
+
+
+
