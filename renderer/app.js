@@ -1083,6 +1083,11 @@ async function handleSignal(data) {
       }
 
       if (data.answer) {
+        // Ignore stale/duplicate answers that arrive after negotiation already completed.
+        if (viewerPc.signalingState !== 'have-local-offer') {
+          return;
+        }
+
         await viewerPc.setRemoteDescription(data.answer);
         await flushViewerPendingIceCandidates();
         tuneReceiversForLatency(viewerPc);
@@ -1134,5 +1139,4 @@ function tuneReceiversForLatency(peer) {
     }
   }
 }
-
 
