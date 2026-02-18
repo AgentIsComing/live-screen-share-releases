@@ -917,12 +917,12 @@ async function manualCheckForUpdates() {
 function getLatencyProfile() {
   const modeName = latencyProfileEl.value;
   if (modeName === 'ultra') {
-    return { maxWidth: 1280, maxHeight: 720, maxFps: 24, maxBitrate: 2000000, playoutDelay: 0 };
+    return { maxWidth: 1600, maxHeight: 900, maxFps: 30, maxBitrate: 3500000, playoutDelay: 0 };
   }
   if (modeName === 'low') {
-    return { maxWidth: 1600, maxHeight: 900, maxFps: 30, maxBitrate: 3000000, playoutDelay: 0.04 };
+    return { maxWidth: 1920, maxHeight: 1080, maxFps: 30, maxBitrate: 5500000, playoutDelay: 0.03 };
   }
-  return { maxWidth: 1920, maxHeight: 1080, maxFps: 30, maxBitrate: 5000000, playoutDelay: 0.08 };
+  return { maxWidth: 2560, maxHeight: 1440, maxFps: 45, maxBitrate: 12000000, playoutDelay: 0.08 };
 }
 
 function tuneReceiversForLatency(peer) {
