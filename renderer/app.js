@@ -68,6 +68,7 @@ let lastStatusText = '';
 let lastUpdateText = '';
 let localStream = null;
 let pc = null;
+let pendingIceCandidates = [];
 let backendRunning = false;
 
 init();
@@ -722,9 +723,37 @@ function stopTracks(stream) {
 }
 
 function resetPeer() {
+  pendingIceCandidates = [];
   if (pc) {
     pc.close();
     pc = null;
+  }
+}
+
+async function queueOrAddIceCandidate(candidate) {
+  if (!candidate || !pc) return;
+
+  if (!pc.remoteDescription) {
+    pendingIceCandidates.push(candidate);
+    return;
+  }
+
+  try {
+    await pc.addIceCandidate(candidate);
+  } catch (error) {
+    setStatus('ICE candidate error: ' + (error?.message || error));
+  }
+}
+
+async function flushPendingIceCandidates() {
+  if (!pc || !pc.remoteDescription || pendingIceCandidates.length === 0) return;
+
+  for (const candidate of pendingIceCandidates.splice(0)) {
+    try {
+      await pc.addIceCandidate(candidate);
+    } catch (error) {
+      setStatus('ICE candidate error: ' + (error?.message || error));
+    }
   }
 }
 
@@ -783,65 +812,71 @@ function stopViewer() {
 async function handleSignal(data) {
   if (!data) return;
 
-  if (mode === 'host') {
-    if (!localStream) return;
+  try {
+    if (mode === 'host') {
+      if (!localStream) return;
 
-    if (data.offer) {
-      resetPeer();
-      pc = makePeerConnection();
-      if (!pc) return;
+      if (data.offer) {
+        resetPeer();
+        pc = makePeerConnection();
+        if (!pc) return;
 
-      const profile = getLatencyProfile();
-      const maxBitrate = Math.min(Number(bitrateEl.value), profile.maxBitrate);
+        const profile = getLatencyProfile();
+        const maxBitrate = Math.min(Number(bitrateEl.value), profile.maxBitrate);
 
-      for (const track of localStream.getTracks()) {
-        const sender = pc.addTrack(track, localStream);
-        if (track.kind === 'video') {
-          const params = sender.getParameters();
-          params.degradationPreference = 'maintain-framerate';
-          params.encodings = [{ maxBitrate, maxFramerate: profile.maxFps, networkPriority: 'high' }];
-          sender.setParameters(params).catch(() => {});
+        for (const track of localStream.getTracks()) {
+          const sender = pc.addTrack(track, localStream);
+          if (track.kind === 'video') {
+            const params = sender.getParameters();
+            params.degradationPreference = 'maintain-framerate';
+            params.encodings = [{ maxBitrate, maxFramerate: profile.maxFps, networkPriority: 'high' }];
+            sender.setParameters(params).catch(() => {});
+          }
         }
+
+        await pc.setRemoteDescription(data.offer);
+        await flushPendingIceCandidates();
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        ws.send(JSON.stringify({
+          type: 'signal',
+          data: {
+            from: clientId,
+            to: data.from,
+            answer
+          }
+        }));
       }
 
-      await pc.setRemoteDescription(data.offer);
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
+      if (data.candidate && pc) {
+        await queueOrAddIceCandidate(data.candidate);
+      }
 
-      ws.send(JSON.stringify({
-        type: 'signal',
-        data: {
-          from: clientId,
-          to: data.from,
-          answer
-        }
-      }));
+      return;
     }
 
-    if (data.candidate && pc) {
-      await pc.addIceCandidate(data.candidate);
+    if (mode === 'viewer') {
+      if (data.to && data.to !== clientId) return;
+
+      if (!pc) {
+        if (!data.answer && !data.candidate) return;
+        pc = makePeerConnection();
+        if (!pc) return;
+      }
+
+      if (data.answer) {
+        await pc.setRemoteDescription(data.answer);
+        await flushPendingIceCandidates();
+        tuneReceiversForLatency(pc);
+      }
+
+      if (data.candidate) {
+        await queueOrAddIceCandidate(data.candidate);
+      }
     }
-
-    return;
-  }
-
-  if (mode === 'viewer') {
-    if (data.to && data.to !== clientId) return;
-
-    if (!pc) {
-      if (!data.answer && !data.candidate) return;
-      pc = makePeerConnection();
-      if (!pc) return;
-    }
-
-    if (data.answer) {
-      await pc.setRemoteDescription(data.answer);
-      tuneReceiversForLatency(pc);
-    }
-
-    if (data.candidate) {
-      await pc.addIceCandidate(data.candidate);
-    }
+  } catch (error) {
+    setStatus('WebRTC signal error: ' + (error?.message || error));
   }
 }
 
