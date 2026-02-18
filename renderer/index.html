@@ -8,9 +8,15 @@
   </head>
   <body>
     <main>
-      <section class="card">
-        <h1>Live Screen Share Desktop</h1>
+      <section class="card header-card">
+        <div>
+          <h1>Live Screen Share Desktop</h1>
+          <p class="sub">Fast private streaming with room + password access.</p>
+        </div>
+        <small id="version"></small>
+      </section>
 
+      <section class="card">
         <div id="sharedControls" class="grid two">
           <label id="modeWrap">
             Mode
@@ -18,18 +24,6 @@
               <option value="host">Host</option>
               <option value="viewer">Viewer</option>
             </select>
-          </label>
-
-          <label id="codeServiceWrap">
-            Code service URL (host advanced)
-            <input id="codeServiceUrl" type="text" placeholder="https://live-screen-share-code-service.jaydenrmaine.workers.dev" />
-          </label>
-
-          <label id="connectivityWrap">
-            Connectivity
-            <button id="startBackend" type="button">Start backend</button>
-            <button id="stopBackend" type="button" class="danger" disabled>Stop backend</button>
-            <button id="checkUpdates" type="button">Check app updates</button>
           </label>
 
           <label id="latencyWrap">
@@ -51,75 +45,94 @@
               <option value="12000000">12 Mbps</option>
             </select>
           </label>
-        </div>
 
-        <div id="hostPanel">
-          <div class="grid two">
-            <label>
-              Video source
-              <select id="videoSource">
-                <option value="display">Display/Window capture</option>
-                <option value="obs-camera">OBS Virtual Camera device</option>
-              </select>
-            </label>
-
-            <label>
-              Display/window source
-              <select id="displaySource"></select>
-            </label>
-
-            <label>
-              Audio mode
-              <select id="audioMode">
-                <option value="display">Display system audio</option>
-                <option value="input">Audio input only</option>
-                <option value="display+input">Display + input</option>
-                <option value="none">No audio</option>
-              </select>
-            </label>
-
-            <label>
-              Camera device
-              <select id="cameraDevice"></select>
-            </label>
-
-            <label>
-              Audio input device
-              <select id="audioDevice"></select>
-            </label>
-          </div>
-
-          <div class="row">
-            <button id="refreshDevices">Refresh devices</button>
-            <button id="startHost">Start hosting</button>
-            <button id="stopHost" class="danger" disabled>Stop hosting</button>
-          </div>
-        </div>
-
-        <div id="viewerPanel" class="hidden">
-          <div id="viewerForm" class="grid">
-            <label>
-              Room ID
-              <input id="roomIdInput" type="text" placeholder="Room ID" />
-            </label>
-            <label>
-              Room password
-              <input id="roomPassword" type="password" placeholder="Room password" />
-            </label>
-            <div class="row">
-              <button id="joinRoom" type="button">Connect</button>
+          <label id="connectivityWrap">
+            Connectivity
+            <div class="row tight">
+              <button id="startBackend" type="button">Start backend</button>
+              <button id="stopBackend" type="button" class="danger" disabled>Stop backend</button>
+              <button id="checkUpdates" type="button">Check app updates</button>
             </div>
-          </div>
+          </label>
+
+          <label id="codeServiceWrap" class="hidden">
+            Code service URL (host advanced)
+            <input id="codeServiceUrl" type="text" placeholder="https://live-screen-share-code-service.jaydenrmaine.workers.dev" />
+          </label>
+        </div>
+      </section>
+
+      <section id="hostPanel" class="card">
+        <h2>Host Controls</h2>
+        <div class="grid two">
+          <label>
+            Video source
+            <select id="videoSource">
+              <option value="display">Display / Window capture</option>
+              <option value="obs-camera">OBS Virtual Camera</option>
+            </select>
+          </label>
+
+          <label>
+            Display/window source
+            <select id="displaySource"></select>
+          </label>
+
+          <label>
+            Audio mode
+            <select id="audioMode">
+              <option value="display">Display system audio</option>
+              <option value="input">Audio input only</option>
+              <option value="display+input">Display + input</option>
+              <option value="none">No audio</option>
+            </select>
+          </label>
+
+          <label>
+            Camera device
+            <select id="cameraDevice"></select>
+          </label>
+
+          <label>
+            Audio input device
+            <select id="audioDevice"></select>
+          </label>
         </div>
 
-        <p id="status" class="status"></p>
-        <p id="updateStatus" class="status"></p>
-        <small id="version"></small>
+        <div class="row">
+          <button id="refreshDevices">Refresh devices</button>
+          <button id="startHost">Start hosting</button>
+          <button id="stopHost" class="danger" disabled>Stop hosting</button>
+        </div>
+
+        <p id="hostStats" class="muted"></p>
+      </section>
+
+      <section id="viewerPanel" class="card hidden">
+        <h2>Join Stream</h2>
+        <div id="viewerForm" class="grid one-col">
+          <label>
+            Room ID
+            <input id="roomIdInput" type="text" placeholder="Room ID" />
+          </label>
+          <label>
+            Room password
+            <input id="roomPassword" type="password" placeholder="Room password" />
+          </label>
+          <div class="row">
+            <button id="joinRoom" type="button">Connect</button>
+          </div>
+        </div>
       </section>
 
       <section class="card">
         <h2>Preview / Playback</h2>
         <video id="video" autoplay playsinline controls></video>
+      </section>
+
+      <section class="card">
+        <p id="status" class="status"></p>
+        <p id="updateStatus" class="status secondary"></p>
       </section>
     </main>
 
@@ -144,4 +157,3 @@
     <script src="./app.js"></script>
   </body>
 </html>
-

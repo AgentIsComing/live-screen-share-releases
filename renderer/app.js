@@ -23,6 +23,7 @@ const hostModalCancelBtn = document.getElementById('hostModalCancel');
 const statusEl = document.getElementById('status');
 const updateStatusEl = document.getElementById('updateStatus');
 const versionEl = document.getElementById('version');
+const hostStatsEl = document.getElementById('hostStats');
 
 const hostPanel = document.getElementById('hostPanel');
 const viewerPanel = document.getElementById('viewerPanel');
@@ -75,11 +76,13 @@ let hostAvailable = false;
 let reconnectTimer = null;
 let lastStatusText = '';
 let lastUpdateText = '';
-let localStream = null;
-let pc = null;
-let pendingIceCandidates = [];
-let activeViewerId = null;
 let backendRunning = false;
+
+let localStream = null;
+let viewerPc = null;
+let viewerPendingIceCandidates = [];
+const hostPeers = new Map();
+const hostPendingIceCandidates = new Map();
 
 init();
 
@@ -88,29 +91,25 @@ async function init() {
 
   modeEl.value = localStorage.getItem(storageKeys.mode) || 'host';
   codeServiceUrlEl.value = localStorage.getItem(storageKeys.codeServiceUrl) || DEFAULT_CODE_SERVICE_URL;
-  bitrateEl.value = localStorage.getItem(storageKeys.bitrate) || '2500000';
-  latencyProfileEl.value = localStorage.getItem(storageKeys.latencyProfile) || 'ultra';
+  bitrateEl.value = localStorage.getItem(storageKeys.bitrate) || '5000000';
+  latencyProfileEl.value = localStorage.getItem(storageKeys.latencyProfile) || 'low';
 
   mode = modeEl.value;
   syncModeUI();
+  updateHostStats();
 
   modeEl.addEventListener('change', onModeChange);
-  [codeServiceUrlEl, bitrateEl, latencyProfileEl].forEach((el) => {
-    el.addEventListener('change', persistInputs);
-  });
+  [codeServiceUrlEl, bitrateEl, latencyProfileEl].forEach((el) => el.addEventListener('change', onStreamingSettingsChanged));
 
   startBackendBtn.addEventListener('click', startBackendFromApp);
   stopBackendBtn.addEventListener('click', stopBackendFromApp);
   checkUpdatesBtn.addEventListener('click', manualCheckForUpdates);
-
   connectRoomBtn.addEventListener('click', connectViewerByRoomPassword);
 
   hostModalConfirmBtn.addEventListener('click', confirmHostStartFromModal);
   hostModalCancelBtn.addEventListener('click', closeHostStartModal);
   hostStartModalEl.addEventListener('click', (event) => {
-    if (event.target === hostStartModalEl) {
-      closeHostStartModal();
-    }
+    if (event.target === hostStartModalEl) closeHostStartModal();
   });
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && !hostStartModalEl.classList.contains('hidden')) {
@@ -118,12 +117,29 @@ async function init() {
     }
   });
 
-  videoSourceEl.addEventListener('change', syncHostSourceUI);
-  refreshDevicesBtn.addEventListener('click', () => {
-    refreshDevices(true).catch((error) => setStatus('Refresh devices failed: ' + (error?.message || error)));
+  videoSourceEl.addEventListener('change', async () => {
+    syncHostSourceUI();
+    await handleLiveSourceChange();
   });
+  displaySourceEl.addEventListener('change', handleLiveSourceChange);
+  audioModeEl.addEventListener('change', handleLiveSourceChange);
+  cameraDeviceEl.addEventListener('change', handleLiveSourceChange);
+  audioDeviceEl.addEventListener('change', handleLiveSourceChange);
+
+  refreshDevicesBtn.addEventListener('click', async () => {
+    try {
+      await refreshDevices(true);
+      if (mode === 'host' && localStream) {
+        await rebuildHostStreamForActiveSession();
+      }
+    } catch (error) {
+      setStatus('Refresh devices failed: ' + (error?.message || error));
+    }
+  });
+
   startHostBtn.addEventListener('click', startHostWithPrompt);
   stopHostBtn.addEventListener('click', () => stopHost(true));
+
   syncHostSourceUI();
   setTimeout(() => {
     refreshDevices(false).catch((error) => setStatus('Refresh devices failed: ' + (error?.message || error)));
@@ -132,9 +148,7 @@ async function init() {
   window.desktopApp.onBackendStatus(handleBackendStatus);
   await refreshBackendState();
 
-  window.desktopApp.onUpdaterStatus((message) => {
-    setUpdateStatus(message);
-  });
+  window.desktopApp.onUpdaterStatus((message) => setUpdateStatus(message));
 }
 
 function persistInputs() {
@@ -142,6 +156,14 @@ function persistInputs() {
   localStorage.setItem(storageKeys.codeServiceUrl, codeServiceUrlEl.value.trim());
   localStorage.setItem(storageKeys.bitrate, bitrateEl.value);
   localStorage.setItem(storageKeys.latencyProfile, latencyProfileEl.value);
+}
+
+function onStreamingSettingsChanged() {
+  persistInputs();
+  if (mode !== 'host' || !localStream) return;
+  for (const peer of hostPeers.values()) {
+    applyVideoSenderSettings(peer);
+  }
 }
 
 function onModeChange() {
@@ -189,6 +211,13 @@ function setUpdateStatus(text, options = {}) {
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function updateHostStats() {
+  const peerCount = hostPeers.size;
+  hostStatsEl.textContent = mode === 'host'
+    ? `Connected viewers: ${peerCount}`
+    : '';
 }
 
 async function refreshBackendState() {
@@ -502,6 +531,10 @@ async function refreshDevices(requestPermissions = false) {
     window.desktopApp.listDesktopSources()
   ]);
 
+  const previousCamera = cameraDeviceEl.value;
+  const previousAudio = audioDeviceEl.value;
+  const previousDisplay = displaySourceEl.value;
+
   const videoInputs = devices.filter((d) => d.kind === 'videoinput');
   const audioInputs = devices.filter((d) => d.kind === 'audioinput');
 
@@ -512,22 +545,34 @@ async function refreshDevices(requestPermissions = false) {
   if (desktopSources.length === 0) {
     displaySourceEl.innerHTML = '<option value="">No display sources found</option>';
   } else {
-    for (const s of desktopSources) {
+    for (const source of desktopSources) {
       const option = document.createElement('option');
-      option.value = s.id;
-      option.textContent = s.name;
+      option.value = source.id;
+      option.textContent = source.name;
       displaySourceEl.appendChild(option);
+    }
+    if (previousDisplay && desktopSources.some((s) => s.id === previousDisplay)) {
+      displaySourceEl.value = previousDisplay;
     }
   }
 
   if (videoInputs.length === 0) {
     cameraDeviceEl.innerHTML = '<option value="">No camera devices found</option>';
   } else {
-    for (const d of videoInputs) {
+    for (const input of videoInputs) {
       const option = document.createElement('option');
-      option.value = d.deviceId;
-      option.textContent = d.label || `Camera ${cameraDeviceEl.length + 1}`;
+      option.value = input.deviceId;
+      option.textContent = input.label || `Camera ${cameraDeviceEl.length + 1}`;
       cameraDeviceEl.appendChild(option);
+    }
+
+    if (previousCamera && videoInputs.some((v) => v.deviceId === previousCamera)) {
+      cameraDeviceEl.value = previousCamera;
+    } else {
+      const obsOption = Array.from(cameraDeviceEl.options).find((option) => /obs|virtual camera/i.test(option.textContent));
+      if (obsOption) {
+        cameraDeviceEl.value = obsOption.value;
+      }
     }
   }
 
@@ -536,64 +581,181 @@ async function refreshDevices(requestPermissions = false) {
   defaultAudio.textContent = 'System default audio input';
   audioDeviceEl.appendChild(defaultAudio);
 
-  for (const d of audioInputs) {
+  for (const input of audioInputs) {
     const option = document.createElement('option');
-    option.value = d.deviceId;
-    option.textContent = d.label || `Audio input ${audioDeviceEl.length}`;
+    option.value = input.deviceId;
+    option.textContent = input.label || `Audio input ${audioDeviceEl.length}`;
     audioDeviceEl.appendChild(option);
   }
-}
-function makePeerConnection() {
-  const config = rtcConfig();
-  if (!config) return null;
 
-  const peer = new RTCPeerConnection(config);
+  if (previousAudio && audioInputs.some((a) => a.deviceId === previousAudio)) {
+    audioDeviceEl.value = previousAudio;
+  }
+}
+
+function makePeerConnection(role, targetViewerId = null) {
+  const peer = new RTCPeerConnection(rtcConfig());
 
   peer.onicecandidate = (event) => {
     if (!event.candidate || !ws || ws.readyState !== WebSocket.OPEN) return;
 
-    const signalData = {
+    const data = {
       from: clientId,
       candidate: event.candidate
     };
 
-    if (mode === 'host' && activeViewerId) {
-      signalData.to = activeViewerId;
+    if (role === 'host' && targetViewerId) {
+      data.to = targetViewerId;
     }
 
-    ws.send(JSON.stringify({
-      type: 'signal',
-      data: signalData
-    }));
+    ws.send(JSON.stringify({ type: 'signal', data }));
   };
 
   peer.onconnectionstatechange = () => {
     const state = peer.connectionState;
-    if (state === 'connected') {
-      setStatus(mode === 'host' ? 'Viewer connected.' : 'Connected to host stream.');
-      if (mode === 'viewer') {
+
+    if (role === 'viewer') {
+      if (state === 'connected') {
+        setStatus('Connected to host stream.');
         viewerFormEl.classList.add('hidden');
         tuneReceiversForLatency(peer);
       }
+      if (state === 'failed' || state === 'disconnected') {
+        setStatus('Viewer connection dropped. Reconnect.');
+      }
+      return;
     }
-    if (state === 'failed' || state === 'disconnected') {
-      setStatus('Peer connection dropped.');
+
+    if (state === 'failed' || state === 'closed' || state === 'disconnected') {
+      closeHostPeer(targetViewerId);
     }
+    updateHostStats();
   };
 
-  if (mode === 'viewer') {
+  if (role === 'viewer') {
     peer.ontrack = (event) => {
       const [stream] = event.streams;
       if (!stream) return;
       videoEl.srcObject = stream;
       videoEl.muted = false;
-      videoEl.play().catch(() => {
-        setStatus('Press play to start video/audio.');
-      });
+      videoEl.play().catch(() => setStatus('Press play to start video/audio.'));
     };
   }
 
   return peer;
+}
+
+function applyVideoSenderSettings(peer) {
+  const profile = getLatencyProfile();
+  const maxBitrate = Math.min(Number(bitrateEl.value), profile.maxBitrate);
+  for (const sender of peer.getSenders()) {
+    if (sender.track?.kind !== 'video') continue;
+    const params = sender.getParameters() || {};
+    const encoding = (params.encodings && params.encodings[0]) || {};
+    encoding.maxBitrate = maxBitrate;
+    encoding.maxFramerate = profile.maxFps;
+    encoding.networkPriority = 'high';
+    params.encodings = [encoding];
+    params.degradationPreference = 'maintain-resolution';
+    sender.setParameters(params).catch(() => {});
+  }
+}
+
+function addOrReplaceTrack(peer, stream, kind) {
+  const track = stream.getTracks().find((t) => t.kind === kind) || null;
+  const sender = peer.getSenders().find((s) => s.track?.kind === kind || (!s.track && kind === 'audio'));
+
+  if (sender) {
+    sender.replaceTrack(track).catch(() => {});
+    return;
+  }
+
+  if (track) {
+    peer.addTrack(track, stream);
+  }
+}
+
+function syncPeerTracks(peer, stream) {
+  addOrReplaceTrack(peer, stream, 'video');
+  addOrReplaceTrack(peer, stream, 'audio');
+  applyVideoSenderSettings(peer);
+}
+
+function closeHostPeer(viewerId) {
+  if (!viewerId) return;
+  const peer = hostPeers.get(viewerId);
+  if (peer) {
+    try { peer.close(); } catch {}
+  }
+  hostPeers.delete(viewerId);
+  hostPendingIceCandidates.delete(viewerId);
+  updateHostStats();
+}
+
+function closeAllHostPeers() {
+  for (const [viewerId, peer] of hostPeers.entries()) {
+    try { peer.close(); } catch {}
+    hostPeers.delete(viewerId);
+  }
+  hostPendingIceCandidates.clear();
+  updateHostStats();
+}
+
+function resetViewerPeer() {
+  viewerPendingIceCandidates = [];
+  if (viewerPc) {
+    try { viewerPc.close(); } catch {}
+    viewerPc = null;
+  }
+}
+
+async function queueOrAddViewerIceCandidate(candidate) {
+  if (!candidate || !viewerPc) return;
+  if (!viewerPc.remoteDescription) {
+    viewerPendingIceCandidates.push(candidate);
+    return;
+  }
+  try {
+    await viewerPc.addIceCandidate(candidate);
+  } catch {}
+}
+
+async function flushViewerPendingIceCandidates() {
+  if (!viewerPc || !viewerPc.remoteDescription || viewerPendingIceCandidates.length === 0) return;
+  for (const candidate of viewerPendingIceCandidates.splice(0)) {
+    try {
+      await viewerPc.addIceCandidate(candidate);
+    } catch {}
+  }
+}
+
+async function queueOrAddHostIceCandidate(viewerId, candidate) {
+  if (!viewerId || !candidate) return;
+
+  const peer = hostPeers.get(viewerId);
+  if (!peer || !peer.remoteDescription) {
+    const queue = hostPendingIceCandidates.get(viewerId) || [];
+    queue.push(candidate);
+    hostPendingIceCandidates.set(viewerId, queue);
+    return;
+  }
+
+  try {
+    await peer.addIceCandidate(candidate);
+  } catch {}
+}
+
+async function flushHostPendingIceCandidates(viewerId) {
+  const peer = hostPeers.get(viewerId);
+  const queue = hostPendingIceCandidates.get(viewerId) || [];
+  if (!peer || !peer.remoteDescription || queue.length === 0) return;
+
+  for (const candidate of queue.splice(0)) {
+    try {
+      await peer.addIceCandidate(candidate);
+    } catch {}
+  }
+  hostPendingIceCandidates.set(viewerId, queue);
 }
 
 async function captureDisplayStream(useDisplayAudio) {
@@ -602,50 +764,38 @@ async function captureDisplayStream(useDisplayAudio) {
     throw new Error('Select a display/window source first.');
   }
 
-  function desktopVideoConstraints(frameRateMax) {
-    const profile = getLatencyProfile();
-    return {
-      mandatory: {
-        chromeMediaSource: 'desktop',
-        chromeMediaSourceId: sourceId,
-        minWidth: 1280,
-        maxWidth: profile.maxWidth,
-        minHeight: 720,
-        maxHeight: profile.maxHeight,
-        minFrameRate: 20,
-        maxFrameRate: Math.min(frameRateMax, profile.maxFps)
-      }
-    };
-  }
+  const profile = getLatencyProfile();
+  const videoConstraints = {
+    mandatory: {
+      chromeMediaSource: 'desktop',
+      chromeMediaSourceId: sourceId,
+      minWidth: 1280,
+      maxWidth: profile.maxWidth,
+      minHeight: 720,
+      maxHeight: profile.maxHeight,
+      minFrameRate: 20,
+      maxFrameRate: profile.maxFps
+    }
+  };
 
-  function desktopAudioConstraints() {
-    return {
-      mandatory: {
-        chromeMediaSource: 'desktop',
-        chromeMediaSourceId: sourceId
-      }
-    };
-  }
+  const audioConstraints = {
+    mandatory: {
+      chromeMediaSource: 'desktop',
+      chromeMediaSourceId: sourceId
+    }
+  };
 
-  let firstError = null;
   try {
     return await navigator.mediaDevices.getUserMedia({
-      video: desktopVideoConstraints(getLatencyProfile().maxFps),
-      audio: useDisplayAudio ? desktopAudioConstraints() : false
+      video: videoConstraints,
+      audio: useDisplayAudio ? audioConstraints : false
     });
   } catch (error) {
-    firstError = error;
-  }
-
-  try {
-    return await navigator.mediaDevices.getUserMedia({
-      video: desktopVideoConstraints(getLatencyProfile().maxFps),
-      audio: false
-    });
-  } catch (secondError) {
-    const reason1 = firstError?.message || String(firstError || 'unknown');
-    const reason2 = secondError?.message || String(secondError || 'unknown');
-    throw new Error(`Desktop capture failed. First attempt: ${reason1}. Retry: ${reason2}`);
+    try {
+      return await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
+    } catch (fallbackError) {
+      throw new Error(`Desktop capture failed: ${error?.message || error} / ${fallbackError?.message || fallbackError}`);
+    }
   }
 }
 
@@ -676,15 +826,15 @@ async function buildHostStream() {
 
   const useInputAudio = audioMode === 'input' || audioMode === 'display+input';
   if (useInputAudio) {
-    const audioId = audioDeviceEl.value;
     const audioConstraints = {
       echoCancellation: false,
       noiseSuppression: false,
       autoGainControl: false,
       channelCount: 2
     };
-    if (audioId) {
-      audioConstraints.deviceId = { exact: audioId };
+
+    if (audioDeviceEl.value) {
+      audioConstraints.deviceId = { exact: audioDeviceEl.value };
     }
 
     const audio = await navigator.mediaDevices.getUserMedia({
@@ -697,11 +847,18 @@ async function buildHostStream() {
   const stream = new MediaStream(tracks);
   const videoTrack = stream.getVideoTracks()[0];
   if (videoTrack) {
-    videoTrack.contentHint = 'motion';
+    videoTrack.contentHint = source === 'display' ? 'detail' : 'motion';
     videoTrack.addEventListener('ended', () => stopHost(true));
   }
 
   return stream;
+}
+
+function stopTracks(stream) {
+  if (!stream) return;
+  for (const track of stream.getTracks()) {
+    track.stop();
+  }
 }
 
 async function startHost() {
@@ -728,56 +885,41 @@ async function startHost() {
   startHostBtn.disabled = true;
   stopHostBtn.disabled = false;
 
-  setStatus('Hosting started.');
+  setStatus('Hosting started. Share Room ID + password.');
 }
 
-function stopTracks(stream) {
-  if (!stream) return;
-  for (const track of stream.getTracks()) {
-    track.stop();
-  }
-}
+async function rebuildHostStreamForActiveSession() {
+  if (!localStream) return;
 
-function resetPeer() {
-  pendingIceCandidates = [];
-  activeViewerId = null;
-  if (pc) {
-    pc.close();
-    pc = null;
-  }
-}
-
-async function queueOrAddIceCandidate(candidate) {
-  if (!candidate || !pc) return;
-
-  if (!pc.remoteDescription) {
-    pendingIceCandidates.push(candidate);
+  const oldStream = localStream;
+  try {
+    localStream = await buildHostStream();
+  } catch (error) {
+    setStatus('Could not apply new source: ' + (error?.message || error));
+    localStream = oldStream;
     return;
   }
 
-  try {
-    await pc.addIceCandidate(candidate);
-  } catch (error) {
-    setStatus('ICE candidate error: ' + (error?.message || error));
+  videoEl.srcObject = localStream;
+  videoEl.muted = true;
+
+  for (const peer of hostPeers.values()) {
+    syncPeerTracks(peer, localStream);
   }
+
+  stopTracks(oldStream);
+  setStatus('Source updated while live.');
 }
 
-async function flushPendingIceCandidates() {
-  if (!pc || !pc.remoteDescription || pendingIceCandidates.length === 0) return;
-
-  for (const candidate of pendingIceCandidates.splice(0)) {
-    try {
-      await pc.addIceCandidate(candidate);
-    } catch (error) {
-      setStatus('ICE candidate error: ' + (error?.message || error));
-    }
-  }
+async function handleLiveSourceChange() {
+  if (mode !== 'host' || !localStream) return;
+  await rebuildHostStreamForActiveSession();
 }
 
 function stopHost(sendSignal) {
   stopTracks(localStream);
   localStream = null;
-  resetPeer();
+  closeAllHostPeers();
 
   videoEl.srcObject = null;
   startHostBtn.disabled = false;
@@ -791,26 +933,22 @@ function stopHost(sendSignal) {
 }
 
 async function startViewer() {
-  if (!joined) {
-    return;
-  }
+  if (!joined) return;
 
   if (!hostAvailable) {
     pendingOffer = true;
     return;
   }
 
-  resetPeer();
-  pc = makePeerConnection();
-  if (!pc) return;
+  resetViewerPeer();
+  viewerPc = makePeerConnection('viewer');
 
-  // Explicit recvonly transceivers are more reliable than offerToReceive* on modern Chromium/WebRTC.
-  pc.addTransceiver('video', { direction: 'recvonly' });
-  pc.addTransceiver('audio', { direction: 'recvonly' });
+  viewerPc.addTransceiver('video', { direction: 'recvonly' });
+  viewerPc.addTransceiver('audio', { direction: 'recvonly' });
 
   setStatus('Connecting to host stream...');
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
+  const offer = await viewerPc.createOffer();
+  await viewerPc.setLocalDescription(offer);
 
   ws.send(JSON.stringify({
     type: 'signal',
@@ -822,8 +960,18 @@ async function startViewer() {
 }
 
 function stopViewer() {
-  resetPeer();
+  resetViewerPeer();
   videoEl.srcObject = null;
+}
+
+function createHostPeer(viewerId) {
+  closeHostPeer(viewerId);
+  const peer = makePeerConnection('host', viewerId);
+  hostPeers.set(viewerId, peer);
+  hostPendingIceCandidates.set(viewerId, hostPendingIceCandidates.get(viewerId) || []);
+  syncPeerTracks(peer, localStream);
+  updateHostStats();
+  return peer;
 }
 
 async function handleSignal(data) {
@@ -833,42 +981,28 @@ async function handleSignal(data) {
     if (mode === 'host') {
       if (!localStream) return;
 
-      if (data.offer) {
-        resetPeer();
-        activeViewerId = data.from || null;
-        pc = makePeerConnection();
-        if (!pc) return;
+      if (data.offer && data.from) {
+        const viewerId = data.from;
+        const peer = createHostPeer(viewerId);
 
-        const profile = getLatencyProfile();
-        const maxBitrate = Math.min(Number(bitrateEl.value), profile.maxBitrate);
+        await peer.setRemoteDescription(data.offer);
+        await flushHostPendingIceCandidates(viewerId);
 
-        for (const track of localStream.getTracks()) {
-          const sender = pc.addTrack(track, localStream);
-          if (track.kind === 'video') {
-            const params = sender.getParameters();
-            params.degradationPreference = 'maintain-framerate';
-            params.encodings = [{ maxBitrate, maxFramerate: profile.maxFps, networkPriority: 'high' }];
-            sender.setParameters(params).catch(() => {});
-          }
-        }
-
-        await pc.setRemoteDescription(data.offer);
-        await flushPendingIceCandidates();
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
+        const answer = await peer.createAnswer();
+        await peer.setLocalDescription(answer);
 
         ws.send(JSON.stringify({
           type: 'signal',
           data: {
             from: clientId,
-            to: data.from,
+            to: viewerId,
             answer
           }
         }));
       }
 
-      if (data.candidate && pc) {
-        await queueOrAddIceCandidate(data.candidate);
+      if (data.candidate && data.from) {
+        await queueOrAddHostIceCandidate(data.from, data.candidate);
       }
 
       return;
@@ -877,20 +1011,19 @@ async function handleSignal(data) {
     if (mode === 'viewer') {
       if (data.to && data.to !== clientId) return;
 
-      if (!pc) {
+      if (!viewerPc) {
         if (!data.answer && !data.candidate) return;
-        pc = makePeerConnection();
-        if (!pc) return;
+        viewerPc = makePeerConnection('viewer');
       }
 
       if (data.answer) {
-        await pc.setRemoteDescription(data.answer);
-        await flushPendingIceCandidates();
-        tuneReceiversForLatency(pc);
+        await viewerPc.setRemoteDescription(data.answer);
+        await flushViewerPendingIceCandidates();
+        tuneReceiversForLatency(viewerPc);
       }
 
       if (data.candidate) {
-        await queueOrAddIceCandidate(data.candidate);
+        await queueOrAddViewerIceCandidate(data.candidate);
       }
     }
   } catch (error) {
@@ -917,12 +1050,12 @@ async function manualCheckForUpdates() {
 function getLatencyProfile() {
   const modeName = latencyProfileEl.value;
   if (modeName === 'ultra') {
-    return { maxWidth: 1600, maxHeight: 900, maxFps: 30, maxBitrate: 3500000, playoutDelay: 0 };
+    return { maxWidth: 1600, maxHeight: 900, maxFps: 30, maxBitrate: 4500000, playoutDelay: 0 };
   }
   if (modeName === 'low') {
-    return { maxWidth: 1920, maxHeight: 1080, maxFps: 30, maxBitrate: 5500000, playoutDelay: 0.03 };
+    return { maxWidth: 1920, maxHeight: 1080, maxFps: 30, maxBitrate: 6500000, playoutDelay: 0.02 };
   }
-  return { maxWidth: 2560, maxHeight: 1440, maxFps: 45, maxBitrate: 12000000, playoutDelay: 0.08 };
+  return { maxWidth: 2560, maxHeight: 1440, maxFps: 45, maxBitrate: 12000000, playoutDelay: 0.06 };
 }
 
 function tuneReceiversForLatency(peer) {
@@ -935,4 +1068,3 @@ function tuneReceiversForLatency(peer) {
     }
   }
 }
-

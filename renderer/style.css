@@ -1,39 +1,60 @@
 :root {
-  --bg: #0b0d13;
-  --panel: #151a26;
-  --line: #2f3a52;
-  --text: #ebf0ff;
-  --muted: #9ca8c6;
-  --accent: #50d1ff;
-  --danger: #ff6f87;
+  --bg-0: #080b12;
+  --bg-1: #101624;
+  --card: rgba(18, 24, 37, 0.92);
+  --line: rgba(120, 156, 214, 0.28);
+  --text: #ecf4ff;
+  --muted: #9cb1d7;
+  --accent: #39c8ff;
+  --accent-2: #55e9b9;
+  --danger: #ff6688;
 }
 
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
-  font-family: "Segoe UI", Tahoma, sans-serif;
-  background: radial-gradient(circle at top, #1a2234 0%, var(--bg) 40%);
+  font-family: "Bahnschrift", "Segoe UI Variable Text", "Trebuchet MS", sans-serif;
   color: var(--text);
+  background:
+    radial-gradient(1200px 700px at 10% -10%, rgba(57, 200, 255, 0.24), transparent 56%),
+    radial-gradient(1000px 640px at 96% -12%, rgba(85, 233, 185, 0.16), transparent 58%),
+    linear-gradient(170deg, var(--bg-1), var(--bg-0));
+  min-height: 100vh;
 }
 
 main {
-  max-width: 1100px;
+  max-width: 1120px;
   margin: 0 auto;
-  padding: 20px;
+  padding: 18px;
   display: grid;
-  gap: 16px;
+  gap: 14px;
 }
 
 .card {
-  background: linear-gradient(150deg, #1a2132, var(--panel));
+  background: var(--card);
   border: 1px solid var(--line);
   border-radius: 14px;
-  padding: 16px;
+  padding: 14px;
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.22);
 }
 
-h1, h2 { margin: 0 0 8px; }
-.sub { color: var(--muted); margin: 0 0 12px; }
+.header-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+h1, h2 {
+  margin: 0 0 6px;
+  letter-spacing: 0.2px;
+}
+
+.sub {
+  margin: 0;
+  color: var(--muted);
+}
 
 .grid {
   display: grid;
@@ -44,62 +65,82 @@ h1, h2 { margin: 0 0 8px; }
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.grid.one-col {
+  grid-template-columns: 1fr;
+}
+
 label {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-size: 14px;
+  font-size: 13px;
+  color: var(--muted);
 }
 
 input, select, textarea, button {
-  background: #101624;
-  color: var(--text);
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 10px;
+  padding: 9px 10px;
   font-size: 14px;
+  color: var(--text);
+  background: rgba(9, 14, 24, 0.88);
 }
 
 textarea { resize: vertical; }
 
 .row {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   margin-top: 12px;
-  flex-wrap: wrap;
+}
+
+.row.tight {
+  margin-top: 0;
 }
 
 button {
   cursor: pointer;
-  background: linear-gradient(125deg, #2f97bf, #4aceff);
-  border-color: #74d7ff;
-  font-weight: 600;
+  background: linear-gradient(120deg, #1e9cc6, #47d2ff);
+  border-color: #62d8ff;
+  font-weight: 700;
+}
+
+button:hover:enabled {
+  filter: brightness(1.06);
 }
 
 button:disabled {
-  opacity: 0.55;
+  opacity: 0.56;
   cursor: not-allowed;
 }
 
 button.danger {
-  background: linear-gradient(125deg, #8a2839, #d84a67);
-  border-color: #ff879e;
+  background: linear-gradient(120deg, #8f2d45, #e04f70);
+  border-color: #ff90aa;
+}
+
+small,
+.muted {
+  color: var(--muted);
 }
 
 .status {
+  margin: 0;
   color: var(--accent);
   min-height: 20px;
-  margin: 12px 0 0;
 }
 
-small { color: var(--muted); }
+.status.secondary {
+  color: var(--accent-2);
+}
 
 video {
   width: 100%;
-  max-height: 65vh;
+  max-height: 66vh;
   border-radius: 10px;
   border: 1px solid var(--line);
-  background: #05070d;
+  background: #05070c;
 }
 
 .hidden { display: none; }
@@ -107,7 +148,7 @@ video {
 .modal {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(2, 5, 10, 0.68);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -116,14 +157,20 @@ video {
 
 .modal-card {
   width: min(460px, 92vw);
-  background: linear-gradient(150deg, #1a2132, var(--panel));
+  background: linear-gradient(160deg, #172238, #101724);
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 16px;
 }
 
-@media (max-width: 860px) {
-  .grid.two { grid-template-columns: 1fr; }
-}
-
 .modal.hidden { display: none; }
+
+@media (max-width: 860px) {
+  .grid.two {
+    grid-template-columns: 1fr;
+  }
+
+  .header-card {
+    flex-direction: column;
+  }
+}
