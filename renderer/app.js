@@ -180,7 +180,7 @@ function syncModeUI() {
   hostPanel.classList.toggle('hidden', !isHost);
   viewerPanel.classList.toggle('hidden', isHost);
 
-  modeEl.parentElement.classList.toggle('hidden', !isHost);
+  modeEl.parentElement.classList.remove('hidden');
   codeServiceWrapEl.classList.toggle('hidden', !isHost);
   connectivityWrapEl.classList.toggle('hidden', !isHost);
   latencyWrapEl.classList.toggle('hidden', !isHost);
@@ -1068,3 +1068,4 @@ function tuneReceiversForLatency(peer) {
     }
   }
 }
+
