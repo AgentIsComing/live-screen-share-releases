@@ -68,7 +68,8 @@
       "allowToChangeInstallationDirectory": true,
       "installerIcon": "assets/app.ico",
       "uninstallerIcon": "assets/app.ico",
-      "installerHeaderIcon": "assets/app.ico"
+      "installerHeaderIcon": "assets/app.ico",
+      "include": "scripts/installer.nsh"
     },
     "publish": [
       {

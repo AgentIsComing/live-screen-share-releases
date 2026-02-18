@@ -7,7 +7,7 @@ try {
 }
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 
 const projectRoot = path.join(__dirname, '..');
 const runtimeDir = path.join(app.getPath('userData'), 'runtime');
@@ -21,6 +21,12 @@ const cloudflaredPath = app.isPackaged
 const backendCwd = app.isPackaged ? process.resourcesPath : projectRoot;
 const updaterServiceDir = path.join(process.env.ProgramData || 'C:\\ProgramData', 'LiveScreenShareUpdater');
 const updaterServiceNoticePath = path.join(updaterServiceDir, 'notice.json');
+const updaterServiceInstallScript = app.isPackaged
+  ? path.join(process.resourcesPath, 'app.asar', 'scripts', 'install_update_service.js')
+  : path.join(projectRoot, 'scripts', 'install_update_service.js');
+const updaterServiceUninstallScript = app.isPackaged
+  ? path.join(process.resourcesPath, 'app.asar', 'scripts', 'uninstall_update_service.js')
+  : path.join(projectRoot, 'scripts', 'uninstall_update_service.js');
 
 const backendState = {
   signalRunning: false,
@@ -35,9 +41,20 @@ const backendState = {
 let signalProc = null;
 let tunnelProc = null;
 let updateDownloaded = false;
+let pendingUpdaterServiceTask = null;
 
 if (app?.commandLine?.appendSwitch) {
   app.commandLine.appendSwitch('disable-features', 'AllowWgcScreenCapturer,AllowWgcWindowCapturer,AllowWgcZeroHz');
+}
+
+{
+  const args = new Set(process.argv.map((value) => String(value || '').toLowerCase()));
+  if (args.has('--install-updater-service')) {
+    pendingUpdaterServiceTask = 'install';
+  }
+  if (args.has('--uninstall-updater-service')) {
+    pendingUpdaterServiceTask = 'uninstall';
+  }
 }
 
 function createWindow() {
@@ -137,6 +154,48 @@ function maybeNotifyUpdaterServiceReady() {
   const notice = readUpdaterServiceNotice();
   if (!notice || notice.status !== 'ready' || !notice.version) return;
   sendUpdaterStatus(`Background update ${notice.version} is ready. Click Check app updates to install now.`);
+}
+
+function hasUpdaterServiceInstalled() {
+  if (process.platform !== 'win32') return false;
+  try {
+    const output = execSync('sc query "LiveScreenShareUpdaterService"', {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).toString();
+    return !/does not exist/i.test(output);
+  } catch {
+    return false;
+  }
+}
+
+function runUpdaterServiceScript(task) {
+  const scriptPath = task === 'uninstall' ? updaterServiceUninstallScript : updaterServiceInstallScript;
+  if (!fs.existsSync(scriptPath)) {
+    return Promise.resolve(false);
+  }
+
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [scriptPath], {
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        RELEASE_OWNER: process.env.RELEASE_OWNER || 'AgentIsComing',
+        RELEASE_REPO: process.env.RELEASE_REPO || 'live-screen-share-releases'
+      },
+      windowsHide: true,
+      stdio: 'ignore'
+    });
+
+    child.on('error', () => resolve(false));
+    child.on('exit', (code) => resolve(code === 0));
+  });
+}
+
+async function ensureUpdaterServiceInstalled() {
+  if (process.platform !== 'win32') return;
+  if (hasUpdaterServiceInstalled()) return;
+  await runUpdaterServiceScript('install');
 }
 function normalizeWsUrl(value) {
   const wsUrl = String(value || '').trim();
@@ -480,6 +539,11 @@ ipcMain.handle('check-for-updates', async () => {
     return { ok: false, error: error.message };
   }
 });
+
+
+
+
+
 
 
 

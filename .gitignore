@@ -5,3 +5,4 @@ dist-packaged/
 runtime/logs/
 runtime/tunnel-info.json
 *.log
+service/daemon/

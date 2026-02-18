@@ -204,3 +204,4 @@ npm run service:uninstall
 ### Notes
 - This service currently uses local Node runtime via `node-windows`.
 - Install service once per PC (host/viewer machines that should self-update).
+
