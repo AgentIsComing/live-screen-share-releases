@@ -377,6 +377,7 @@ function connectSignaling() {
 
     if (message.type === 'broadcast-ended' && mode === 'viewer') {
       stopViewer();
+      viewerFormEl.classList.remove('hidden');
       setStatus('Host stopped sharing.');
       return;
     }
@@ -859,12 +860,17 @@ async function buildHostStream() {
     const cameraId = cameraDeviceEl.value;
     if (!cameraId) throw new Error('Select OBS Virtual Camera device first.');
 
+    const profile = getLatencyProfile();
+    const obsMaxWidth = Math.min(profile.maxWidth, 1920);
+    const obsMaxHeight = Math.min(profile.maxHeight, 1080);
+    const obsMaxFps = audioMode === 'none' ? profile.maxFps : Math.min(profile.maxFps, 30);
+
     const camera = await navigator.mediaDevices.getUserMedia({
       video: {
         deviceId: { exact: cameraId },
-        frameRate: { ideal: getLatencyProfile().maxFps, max: getLatencyProfile().maxFps },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 }
+        frameRate: { ideal: obsMaxFps, max: obsMaxFps },
+        width: { ideal: obsMaxWidth, max: obsMaxWidth },
+        height: { ideal: obsMaxHeight, max: obsMaxHeight }
       },
       audio: false
     });
@@ -1017,6 +1023,7 @@ async function startViewer() {
 function stopViewer() {
   resetViewerPeer();
   videoEl.srcObject = null;
+  viewerFormEl.classList.remove('hidden');
 }
 
 function createHostPeer(viewerId) {
@@ -1123,5 +1130,4 @@ function tuneReceiversForLatency(peer) {
     }
   }
 }
-
 

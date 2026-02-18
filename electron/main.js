@@ -32,6 +32,7 @@ const backendState = {
 
 let signalProc = null;
 let tunnelProc = null;
+let updateDownloaded = false;
 
 if (app?.commandLine?.appendSwitch) {
   app.commandLine.appendSwitch('disable-features', 'AllowWgcScreenCapturer,AllowWgcWindowCapturer,AllowWgcZeroHz');
@@ -45,6 +46,7 @@ function createWindow() {
     minHeight: 720,
     autoHideMenuBar: true,
     backgroundColor: '#10131c',
+    icon: path.join(projectRoot, 'assets', 'app.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -166,17 +168,17 @@ function setupAutoUpdater() {
   autoUpdater.autoInstallOnAppQuit = true;
 
   autoUpdater.on('checking-for-update', () => sendUpdaterStatus('Checking for updates...'));
-  autoUpdater.on('update-available', () => sendUpdaterStatus('Update available. Downloading...'));
-  autoUpdater.on('update-not-available', () => sendUpdaterStatus('App is up to date.'));
+  autoUpdater.on('update-available', () => {
+    updateDownloaded = false;
+    sendUpdaterStatus('Update available. Downloading in background...');
+  });
+  autoUpdater.on('update-not-available', () => {
+    updateDownloaded = false;
+    sendUpdaterStatus('App is up to date.');
+  });
   autoUpdater.on('update-downloaded', () => {
-    sendUpdaterStatus('Update downloaded. Restarting app to apply update...');
-    setTimeout(() => {
-      try {
-        autoUpdater.quitAndInstall(false, true);
-      } catch (error) {
-        sendUpdaterStatus(`Auto-restart failed: ${error.message}`);
-      }
-    }, 2500);
+    updateDownloaded = true;
+    sendUpdaterStatus('Update downloaded. Click Check app updates to install now.');
   });
   autoUpdater.on('error', (err) => sendUpdaterStatus(`Update error: ${err.message}`));
 
@@ -185,8 +187,13 @@ function setupAutoUpdater() {
       // ignore
     });
   }, 3000);
-}
 
+  setInterval(() => {
+    autoUpdater.checkForUpdatesAndNotify().catch(() => {
+      // ignore
+    });
+  }, 30 * 60 * 1000);
+}
 function startSignalServer() {
   let reuseExternalSignal = false;
   if (signalProc && !signalProc.killed) {
@@ -403,10 +410,24 @@ ipcMain.handle('check-for-updates', async () => {
   if (!app.isPackaged || !autoUpdater) {
     return { ok: false, error: 'Update checks run only in installed builds.' };
   }
+
   try {
+    if (updateDownloaded) {
+      sendUpdaterStatus('Installing update now...');
+      setTimeout(() => {
+        try {
+          autoUpdater.quitAndInstall(false, true);
+        } catch (error) {
+          sendUpdaterStatus(`Install failed: ${error.message}`);
+        }
+      }, 400);
+      return { ok: true, installing: true };
+    }
+
     await autoUpdater.checkForUpdates();
-    return { ok: true };
+    return { ok: true, installing: false };
   } catch (error) {
     return { ok: false, error: error.message };
   }
 });
+

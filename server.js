@@ -2,6 +2,7 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 3000;
+const HOST_RECONNECT_GRACE_MS = 10000;
 
 const server = http.createServer((req, res) => {
   if (req.url === '/health') {
@@ -19,9 +20,23 @@ const rooms = new Map();
 
 function ensureRoom(roomId) {
   if (!rooms.has(roomId)) {
-    rooms.set(roomId, { host: null, hostId: null, viewers: new Set(), viewersById: new Map() });
+    rooms.set(roomId, {
+      host: null,
+      hostId: null,
+      viewers: new Set(),
+      viewersById: new Map(),
+      hostDisconnectTimer: null,
+      hostDisconnectDeadline: null
+    });
   }
   return rooms.get(roomId);
+}
+
+function clearHostDisconnectTimer(room) {
+  if (!room?.hostDisconnectTimer) return;
+  clearTimeout(room.hostDisconnectTimer);
+  room.hostDisconnectTimer = null;
+  room.hostDisconnectDeadline = null;
 }
 
 function send(ws, payload) {
@@ -33,7 +48,7 @@ function send(ws, payload) {
 function cleanupRoom(roomId) {
   const room = rooms.get(roomId);
   if (!room) return;
-  if (!room.host && room.viewers.size === 0) {
+  if (!room.host && room.viewers.size === 0 && !room.hostDisconnectTimer) {
     rooms.delete(roomId);
   }
 }
@@ -73,6 +88,8 @@ wss.on('connection', (ws) => {
           send(ws, { type: 'error', message: 'Room already has a host' });
           return;
         }
+
+        clearHostDisconnectTimer(room);
 
         room.host = ws;
         room.hostId = clientId;
@@ -118,6 +135,7 @@ wss.on('connection', (ws) => {
     }
 
     if (message.type === 'broadcast-end' && currentRole === 'host') {
+      clearHostDisconnectTimer(room);
       for (const viewer of room.viewers) {
         send(viewer, { type: 'broadcast-ended' });
       }
@@ -133,9 +151,23 @@ wss.on('connection', (ws) => {
     if (currentRole === 'host' && room.host === ws) {
       room.host = null;
       room.hostId = null;
-      for (const viewer of room.viewers) {
-        send(viewer, { type: 'broadcast-ended' });
-      }
+
+      clearHostDisconnectTimer(room);
+      room.hostDisconnectDeadline = Date.now() + HOST_RECONNECT_GRACE_MS;
+      room.hostDisconnectTimer = setTimeout(() => {
+        const freshRoom = rooms.get(currentRoomId);
+        if (!freshRoom) return;
+        if (freshRoom.host) return;
+
+        freshRoom.hostDisconnectTimer = null;
+        freshRoom.hostDisconnectDeadline = null;
+
+        for (const viewer of freshRoom.viewers) {
+          send(viewer, { type: 'broadcast-ended' });
+        }
+
+        cleanupRoom(currentRoomId);
+      }, HOST_RECONNECT_GRACE_MS);
     }
 
     if (currentRole === 'viewer') {
@@ -150,3 +182,4 @@ wss.on('connection', (ws) => {
 server.listen(PORT, () => {
   console.log(`Signaling server listening on :${PORT}`);
 });
+
