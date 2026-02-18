@@ -525,7 +525,7 @@ ipcMain.handle('check-for-updates', async () => {
       sendUpdaterStatus('Installing update now...');
       setTimeout(() => {
         try {
-          autoUpdater.quitAndInstall(false, true);
+          autoUpdater.quitAndInstall(true, true);
         } catch (error) {
           sendUpdaterStatus(`Install failed: ${error.message}`);
         }
@@ -539,14 +539,4 @@ ipcMain.handle('check-for-updates', async () => {
     return { ok: false, error: error.message };
   }
 });
-
-
-
-
-
-
-
-
-
-
 
