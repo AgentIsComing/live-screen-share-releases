@@ -78,6 +78,7 @@ let lastUpdateText = '';
 let localStream = null;
 let pc = null;
 let pendingIceCandidates = [];
+let activeViewerId = null;
 let backendRunning = false;
 
 init();
@@ -551,12 +552,18 @@ function makePeerConnection() {
   peer.onicecandidate = (event) => {
     if (!event.candidate || !ws || ws.readyState !== WebSocket.OPEN) return;
 
+    const signalData = {
+      from: clientId,
+      candidate: event.candidate
+    };
+
+    if (mode === 'host' && activeViewerId) {
+      signalData.to = activeViewerId;
+    }
+
     ws.send(JSON.stringify({
       type: 'signal',
-      data: {
-        from: clientId,
-        candidate: event.candidate
-      }
+      data: signalData
     }));
   };
 
@@ -733,6 +740,7 @@ function stopTracks(stream) {
 
 function resetPeer() {
   pendingIceCandidates = [];
+  activeViewerId = null;
   if (pc) {
     pc.close();
     pc = null;
@@ -827,6 +835,7 @@ async function handleSignal(data) {
 
       if (data.offer) {
         resetPeer();
+        activeViewerId = data.from || null;
         pc = makePeerConnection();
         if (!pc) return;
 
