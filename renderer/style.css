@@ -174,3 +174,22 @@ video {
     flex-direction: column;
   }
 }
+
+.card h2 {
+  font-size: 18px;
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: rgba(95, 216, 255, 0.86);
+  box-shadow: 0 0 0 2px rgba(95, 216, 255, 0.2);
+}
+
+button {
+  transition: filter 120ms ease, transform 120ms ease;
+}
+
+button:active:enabled {
+  transform: translateY(1px);
+}
+

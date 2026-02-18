@@ -77,6 +77,9 @@ let reconnectTimer = null;
 let lastStatusText = '';
 let lastUpdateText = '';
 let backendRunning = false;
+let backendStarting = false;
+let hostStarting = false;
+let suppressTrackEndedUntil = 0;
 
 let localStream = null;
 let viewerPc = null;
@@ -149,6 +152,13 @@ async function init() {
   await refreshBackendState();
 
   window.desktopApp.onUpdaterStatus((message) => setUpdateStatus(message));
+
+  // Pre-warm backend in host mode so Start hosting is faster.
+  setTimeout(() => {
+    if (mode === 'host' && !backendRunning) {
+      startBackendFromApp().catch(() => {});
+    }
+  }, 600);
 }
 
 function persistInputs() {
@@ -227,7 +237,7 @@ async function refreshBackendState() {
 
 function handleBackendStatus(state) {
   backendRunning = Boolean(state?.signalRunning) && Boolean(state?.tunnelRunning);
-  startBackendBtn.disabled = backendRunning;
+  startBackendBtn.disabled = backendRunning || backendStarting || hostStarting;
   stopBackendBtn.disabled = !Boolean(state?.signalRunning || state?.tunnelRunning);
 
   if (state?.wsUrl) {
@@ -240,26 +250,43 @@ function handleBackendStatus(state) {
 }
 
 async function startBackendFromApp() {
-  setStatus('Starting signaling + tunnel...');
-  const result = await window.desktopApp.startBackend();
-  handleBackendStatus(result);
-  if (!result.ok) {
-    setStatus('Backend start failed: ' + result.error);
-    return false;
+  if (backendRunning) {
+    return true;
   }
 
-  for (let i = 0; i < 20; i += 1) {
-    const wsUrl = await window.desktopApp.getTunnelUrl();
-    if (wsUrl) {
-      signalUrl = wsUrl;
-      setStatus('Backend ready.');
-      return true;
+  if (backendStarting) {
+    for (let i = 0; i < 20; i += 1) {
+      if (backendRunning) return true;
+      await wait(250);
     }
-    await wait(500);
+    return backendRunning;
   }
 
-  setStatus('Tunnel did not become ready yet.');
-  return false;
+  backendStarting = true;
+  setStatus('Starting signaling + tunnel...');
+  try {
+    const result = await window.desktopApp.startBackend();
+    handleBackendStatus(result);
+    if (!result.ok) {
+      setStatus('Backend start failed: ' + result.error);
+      return false;
+    }
+
+    for (let i = 0; i < 20; i += 1) {
+      const wsUrl = await window.desktopApp.getTunnelUrl();
+      if (wsUrl) {
+        signalUrl = wsUrl;
+        setStatus('Backend ready.');
+        return true;
+      }
+      await wait(500);
+    }
+
+    setStatus('Tunnel did not become ready yet.');
+    return false;
+  } finally {
+    backendStarting = false;
+  }
 }
 
 async function stopBackendFromApp() {
@@ -432,10 +459,17 @@ async function confirmHostStartFromModal() {
   closeHostStartModal();
   roomId = promptedRoomId;
   roomPassword = promptedPassword;
+  hostStarting = true;
+  startHostBtn.disabled = true;
 
   if (!backendRunning) {
+    setStatus('Preparing backend...');
     const started = await startBackendFromApp();
-    if (!started) return;
+    if (!started) {
+      hostStarting = false;
+      startHostBtn.disabled = false;
+      return;
+    }
   }
 
   if (!signalUrl) {
@@ -443,17 +477,23 @@ async function confirmHostStartFromModal() {
   }
   if (!signalUrl) {
     setStatus('No tunnel signaling URL available yet.');
+    hostStarting = false;
+    startHostBtn.disabled = false;
     return;
   }
 
+  setStatus('Connecting signaling...');
   reconnectSignaling();
   const ready = await waitForSignalingJoin();
   if (!ready) {
     setStatus('Signaling join timed out.');
+    hostStarting = false;
+    startHostBtn.disabled = false;
     return;
   }
 
   const baseUrl = (codeServiceUrlEl.value || DEFAULT_CODE_SERVICE_URL).trim();
+  setStatus('Publishing room...');
   const publish = await window.desktopApp.registerRoomAccess({
     baseUrl,
     roomId,
@@ -464,10 +504,17 @@ async function confirmHostStartFromModal() {
 
   if (!publish.ok) {
     setStatus('Publish room failed: ' + publish.error);
+    hostStarting = false;
+    startHostBtn.disabled = false;
     return;
   }
 
+  setStatus('Starting capture...');
   await startHost();
+  hostStarting = false;
+  if (!localStream) {
+    startHostBtn.disabled = false;
+  }
 }
 
 async function connectViewerByRoomPassword() {
@@ -848,7 +895,12 @@ async function buildHostStream() {
   const videoTrack = stream.getVideoTracks()[0];
   if (videoTrack) {
     videoTrack.contentHint = source === 'display' ? 'detail' : 'motion';
-    videoTrack.addEventListener('ended', () => stopHost(true));
+    videoTrack.addEventListener('ended', () => {
+      if (Date.now() < suppressTrackEndedUntil) return;
+      if (!localStream) return;
+      if (!localStream.getTracks().includes(videoTrack)) return;
+      stopHost(true);
+    });
   }
 
   return stream;
@@ -907,6 +959,8 @@ async function rebuildHostStreamForActiveSession() {
     syncPeerTracks(peer, localStream);
   }
 
+  // Avoid false host-stop when old tracks end during source switch.
+  suppressTrackEndedUntil = Date.now() + 2500;
   stopTracks(oldStream);
   setStatus('Source updated while live.');
 }
@@ -929,6 +983,7 @@ function stopHost(sendSignal) {
     ws.send(JSON.stringify({ type: 'broadcast-end' }));
   }
 
+  hostStarting = false;
   setStatus('Hosting stopped.');
 }
 
@@ -1068,4 +1123,5 @@ function tuneReceiversForLatency(peer) {
     }
   }
 }
+
 
