@@ -19,14 +19,17 @@
     "release": "powershell -ExecutionPolicy Bypass -File ./scripts/release.ps1",
     "code-service:kv:create": "npx wrangler kv namespace create JOIN_CODES --config cloudflare/join-code-service/wrangler.toml",
     "code-service:deploy": "npx wrangler deploy --config cloudflare/join-code-service/wrangler.toml",
-    "code-service:dev": "npx wrangler dev --remote --config cloudflare/join-code-service/wrangler.toml"
+    "code-service:dev": "npx wrangler dev --remote --config cloudflare/join-code-service/wrangler.toml",
+    "service:install": "node scripts/install_update_service.js",
+    "service:uninstall": "node scripts/uninstall_update_service.js"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
     "ws": "^8.18.0",
-    "electron-updater": "^6.3.9"
+    "electron-updater": "^6.3.9",
+    "node-windows": "^1.0.0-beta.8"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
@@ -48,7 +51,8 @@
       "server.js",
       "package.json",
       "runtime/**/*",
-      "assets/**/*"
+      "assets/**/*",
+      "service/**/*"
     ],
     "win": {
       "target": [

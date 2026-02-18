@@ -19,6 +19,8 @@ const cloudflaredPath = app.isPackaged
   ? path.join(process.resourcesPath, 'tools', 'cloudflared.exe')
   : path.join(projectRoot, 'tools', 'cloudflared.exe');
 const backendCwd = app.isPackaged ? process.resourcesPath : projectRoot;
+const updaterServiceDir = path.join(process.env.ProgramData || 'C:\\ProgramData', 'LiveScreenShareUpdater');
+const updaterServiceNoticePath = path.join(updaterServiceDir, 'notice.json');
 
 const backendState = {
   signalRunning: false,
@@ -101,6 +103,41 @@ function writeTunnelInfo(url) {
   );
 }
 
+
+function readUpdaterServiceNotice() {
+  try {
+    if (!fs.existsSync(updaterServiceNoticePath)) return null;
+    return JSON.parse(fs.readFileSync(updaterServiceNoticePath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+function clearUpdaterServiceNotice() {
+  try {
+    if (fs.existsSync(updaterServiceNoticePath)) {
+      fs.unlinkSync(updaterServiceNoticePath);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function runSilentInstaller(installerPath) {
+  const escaped = String(installerPath || '').replace(/'/g, "''");
+  const command = `Start-Process -FilePath '${escaped}' -ArgumentList '/S' -WindowStyle Hidden`;
+  spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command], {
+    detached: true,
+    windowsHide: true,
+    stdio: 'ignore'
+  }).unref();
+}
+
+function maybeNotifyUpdaterServiceReady() {
+  const notice = readUpdaterServiceNotice();
+  if (!notice || notice.status !== 'ready' || !notice.version) return;
+  sendUpdaterStatus(`Background update ${notice.version} is ready. Click Check app updates to install now.`);
+}
 function normalizeWsUrl(value) {
   const wsUrl = String(value || '').trim();
   if (!/^wss?:\/\//i.test(wsUrl)) {
@@ -318,6 +355,10 @@ function stopBackend() {
 app.whenReady().then(() => {
   setupAutoUpdater();
   createWindow();
+
+  setTimeout(() => maybeNotifyUpdaterServiceReady(), 3500);
+  setInterval(() => maybeNotifyUpdaterServiceReady(), 60 * 1000);
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -412,6 +453,15 @@ ipcMain.handle('check-for-updates', async () => {
   }
 
   try {
+    const serviceNotice = readUpdaterServiceNotice();
+    if (serviceNotice?.status === 'ready' && serviceNotice?.installerPath && fs.existsSync(serviceNotice.installerPath)) {
+      sendUpdaterStatus(`Installing background update ${serviceNotice.version || ''}...`);
+      runSilentInstaller(serviceNotice.installerPath);
+      clearUpdaterServiceNotice();
+      setTimeout(() => app.quit(), 350);
+      return { ok: true, installing: true, source: 'service' };
+    }
+
     if (updateDownloaded) {
       sendUpdaterStatus('Installing update now...');
       setTimeout(() => {
@@ -421,7 +471,7 @@ ipcMain.handle('check-for-updates', async () => {
           sendUpdaterStatus(`Install failed: ${error.message}`);
         }
       }, 400);
-      return { ok: true, installing: true };
+      return { ok: true, installing: true, source: 'app' };
     }
 
     await autoUpdater.checkForUpdates();
@@ -430,4 +480,9 @@ ipcMain.handle('check-for-updates', async () => {
     return { ok: false, error: error.message };
   }
 });
+
+
+
+
+
 

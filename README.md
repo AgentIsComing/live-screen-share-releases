@@ -180,3 +180,27 @@ npm run code-service:deploy
 5. Viewer clicks `Connect as viewer`.
 
 Code entries expire automatically (default ~15 minutes).
+
+## Background Auto-Update Service (Windows Service)
+This project now supports a true background updater service (option 2) so updates can be downloaded while the app is closed.
+
+### Install the service (run as Administrator)
+```powershell
+npm run service:install
+```
+
+### Remove the service
+```powershell
+npm run service:uninstall
+```
+
+### How it works
+- Service name: `LiveScreenShareUpdaterService`
+- Checks GitHub releases every 15 minutes
+- Downloads the latest setup `.exe` in the background
+- If app is closed: applies update silently
+- If app is open: app shows "Background update ready" and user can click `Check app updates` to install now
+
+### Notes
+- This service currently uses local Node runtime via `node-windows`.
+- Install service once per PC (host/viewer machines that should self-update).

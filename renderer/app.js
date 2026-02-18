@@ -391,6 +391,10 @@ function connectSignaling() {
     joined = false;
     if (mode === 'host') {
       setStatus(`Signaling disconnected (code ${event.code}). Reconnecting...`);
+    } else {
+      stopViewer();
+      viewerFormEl.classList.remove('hidden');
+      setStatus(`Disconnected from host (code ${event.code}). Reconnecting...`);
     }
     if (reconnectTimer) return;
     reconnectTimer = setTimeout(() => {
@@ -1130,4 +1134,5 @@ function tuneReceiversForLatency(peer) {
     }
   }
 }
+
 
