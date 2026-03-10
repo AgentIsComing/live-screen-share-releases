@@ -7,141 +7,223 @@
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
-    <main>
-      <section class="card header-card">
-        <div class="brand-wrap">
-          <div class="brand-logo">LS</div>
-          <div>
-            <h1>Live Screen Share Desktop</h1>
-            <p class="sub">Fast private streaming with room + password access.</p>
+    <main class="app-shell">
+      <aside class="sidebar">
+        <section class="sidebar-card brand-panel">
+          <div class="brand-mark" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
           </div>
-        </div>
-        <small id="version"></small>
-      </section>
+          <div>
+            <p class="eyebrow">Remote streaming</p>
+            <h1>Live Screen Share</h1>
+            <p class="sub">Desktop-grade hosting and viewing with room-based access.</p>
+          </div>
+        </section>
 
-      <section class="card">
-        <div id="sharedControls" class="grid two">
-          <label id="modeWrap">
+        <section class="sidebar-card">
+          <p class="section-kicker">Mode</p>
+          <div class="mode-switch" aria-label="Mode switch">
+            <button id="modeHostBtn" class="mode-chip" type="button" data-mode="host">Host</button>
+            <button id="modeViewerBtn" class="mode-chip" type="button" data-mode="viewer">Viewer</button>
+          </div>
+          <label id="modeWrap" class="visually-hidden">
             Mode
             <select id="mode">
               <option value="host">Host</option>
               <option value="viewer">Viewer</option>
             </select>
           </label>
+        </section>
 
-          <label id="latencyWrap">
-            Latency profile
-            <select id="latencyProfile">
-              <option value="ultra">Ultra (lowest delay)</option>
-              <option value="low">Low</option>
-              <option value="balanced">Balanced</option>
-            </select>
-          </label>
-
-          <label id="bitrateWrap">
-            Max video bitrate
-            <select id="bitrate">
-              <option value="2500000">2.5 Mbps</option>
-              <option value="3500000">3.5 Mbps</option>
-              <option value="5000000">5 Mbps</option>
-              <option value="8000000">8 Mbps</option>
-              <option value="12000000">12 Mbps</option>
-            </select>
-          </label>
-
-          <label id="connectivityWrap">
-            Connectivity
-            <div class="row tight">
-              <button id="startBackend" type="button">Start backend</button>
-              <button id="stopBackend" type="button" class="danger" disabled>Stop backend</button>
-              <button id="checkUpdates" type="button">Check app updates</button>
+        <section class="sidebar-card host-only" id="hostControlRail">
+          <div class="rail-head">
+            <div>
+              <p class="section-kicker">Signal</p>
+              <h2>Session backend</h2>
             </div>
-          </label>
+            <span class="pill neutral">Relay</span>
+          </div>
+
+          <div id="connectivityWrap" class="action-stack">
+            <button id="startBackend" type="button">Start backend</button>
+            <button id="stopBackend" type="button" class="ghost danger" disabled>Stop backend</button>
+            <button id="checkUpdates" type="button" class="ghost">Check app updates</button>
+          </div>
+
+          <div class="grid duo compact">
+            <label id="latencyWrap">
+              Latency profile
+              <select id="latencyProfile">
+                <option value="ultra">Ultra (lowest delay)</option>
+                <option value="low">Low</option>
+                <option value="balanced">Balanced</option>
+              </select>
+            </label>
+
+            <label id="bitrateWrap">
+              Max bitrate
+              <select id="bitrate">
+                <option value="2500000">2.5 Mbps</option>
+                <option value="3500000">3.5 Mbps</option>
+                <option value="5000000">5 Mbps</option>
+                <option value="8000000">8 Mbps</option>
+                <option value="12000000">12 Mbps</option>
+              </select>
+            </label>
+          </div>
 
           <label id="codeServiceWrap" class="hidden">
             Code service URL (host advanced)
             <input id="codeServiceUrl" type="text" placeholder="https://live-screen-share-code-service.jaydenrmaine.workers.dev" />
           </label>
-        </div>
-      </section>
+        </section>
 
-      <section id="hostPanel" class="card">
-        <h2>Host Controls</h2>
-        <div class="grid two">
-          <label>
-            Video source
-            <select id="videoSource">
-              <option value="display">Display / Window capture</option>
-              <option value="obs-camera">OBS Virtual Camera</option>
-            </select>
-          </label>
+        <section class="sidebar-card status-panel">
+          <div class="rail-head">
+            <div>
+              <p class="section-kicker">Live status</p>
+              <h2>Connection</h2>
+            </div>
+            <span class="pill" id="statusBadge">Idle</span>
+          </div>
+          <p id="status" class="status"></p>
+          <p id="updateStatus" class="status secondary"></p>
+        </section>
 
-          <label>
-            Display/window source
-            <select id="displaySource"></select>
-          </label>
+        <section class="sidebar-card version-panel">
+          <p class="section-kicker">Build</p>
+          <small id="version"></small>
+        </section>
+      </aside>
 
-          <label>
-            Audio mode
-            <select id="audioMode">
-              <option value="display">Display system audio</option>
-              <option value="input">Audio input only</option>
-              <option value="display+input">Display + input</option>
-              <option value="none">No audio</option>
-            </select>
-          </label>
+      <section class="workspace">
+        <section id="hostPanel" class="workspace-card host-layout">
+          <div class="hero">
+            <div>
+              <p class="section-kicker">This device</p>
+              <h2>Start a remote viewing session</h2>
+              <p class="hero-copy">Choose your source, launch a room, and keep the stream tuned for low delay.</p>
+            </div>
+            <div class="hero-actions">
+              <button id="startHost">Start hosting</button>
+              <button id="stopHost" class="ghost danger" disabled>Stop hosting</button>
+            </div>
+          </div>
 
-          <label>
-            Camera device
-            <select id="cameraDevice"></select>
-          </label>
+          <div class="metrics-strip">
+            <article class="metric-card">
+              <span class="metric-label">Audience</span>
+              <strong id="hostStats">Connected viewers: 0</strong>
+            </article>
+            <article class="metric-card">
+              <span class="metric-label">Capture mode</span>
+              <strong id="captureModeDisplay">Display / Window capture</strong>
+            </article>
+          </div>
 
-          <label>
-            Audio input device
-            <select id="audioDevice"></select>
-          </label>
-        </div>
+          <div class="host-settings-grid">
+            <section class="surface-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="section-kicker">Video</p>
+                  <h3>Source routing</h3>
+                </div>
+              </div>
+              <div class="grid duo">
+                <label>
+                  Video source
+                  <select id="videoSource">
+                    <option value="display">Display / Window capture</option>
+                    <option value="obs-camera">OBS Virtual Camera</option>
+                  </select>
+                </label>
 
-        <div class="row">
-          <button id="refreshDevices">Refresh devices</button>
-          <button id="startHost">Start hosting</button>
-          <button id="stopHost" class="danger" disabled>Stop hosting</button>
-        </div>
+                <label>
+                  Display/window source
+                  <select id="displaySource"></select>
+                </label>
 
-        <p id="hostStats" class="muted"></p>
-      </section>
+                <label>
+                  Camera device
+                  <select id="cameraDevice"></select>
+                </label>
+              </div>
+            </section>
 
-      <section id="viewerPanel" class="card hidden">
-        <h2>Join Stream</h2>
-        <div id="viewerForm" class="grid one-col">
-          <label>
-            Room ID
-            <input id="roomIdInput" type="text" placeholder="Room ID" />
-          </label>
-          <label>
-            Room password
-            <input id="roomPassword" type="password" placeholder="Room password" />
-          </label>
-          <div class="row">
+            <section class="surface-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="section-kicker">Audio</p>
+                  <h3>Output mix</h3>
+                </div>
+              </div>
+              <div class="grid duo">
+                <label>
+                  Audio mode
+                  <select id="audioMode">
+                    <option value="display">Display system audio</option>
+                    <option value="input">Audio input only</option>
+                    <option value="display+input">Display + input</option>
+                    <option value="none">No audio</option>
+                  </select>
+                </label>
+
+                <label>
+                  Audio input device
+                  <select id="audioDevice"></select>
+                </label>
+              </div>
+              <div class="panel-actions">
+                <button id="refreshDevices" class="ghost" type="button">Refresh devices</button>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section id="viewerPanel" class="workspace-card viewer-layout hidden">
+          <div class="viewer-hero">
+            <div>
+              <p class="section-kicker">Remote device</p>
+              <h2>Join a live session</h2>
+              <p class="hero-copy">Enter the room code and password. Once connected, the join form disappears and playback takes over.</p>
+            </div>
+          </div>
+
+          <div id="viewerForm" class="viewer-form">
+            <label>
+              Room ID
+              <input id="roomIdInput" type="text" placeholder="Enter room ID" />
+            </label>
+            <label>
+              Room password
+              <input id="roomPassword" type="password" placeholder="Enter room password" />
+            </label>
             <button id="joinRoom" type="button">Connect</button>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <section class="card">
-        <h2>Preview / Playback</h2>
-        <video id="video" autoplay playsinline controls></video>
-      </section>
-
-      <section class="card">
-        <p id="status" class="status"></p>
-        <p id="updateStatus" class="status secondary"></p>
+        <section class="workspace-card preview-shell">
+          <div class="preview-head">
+            <div>
+              <p class="section-kicker">Live feed</p>
+              <h2>Preview / Playback</h2>
+            </div>
+            <span class="pill neutral">WebRTC</span>
+          </div>
+          <div class="video-frame">
+            <video id="video" autoplay playsinline controls></video>
+          </div>
+        </section>
       </section>
     </main>
 
     <div id="hostStartModal" class="modal hidden" hidden>
       <div class="modal-card">
-        <h2>Start Hosting</h2>
+        <p class="section-kicker">Create session</p>
+        <h2>Start hosting</h2>
+        <p class="hero-copy">Set the room details your viewers will use to join.</p>
         <label>
           Room ID
           <input id="hostModalRoomId" type="text" placeholder="Enter room ID" />
@@ -150,9 +232,9 @@
           Room password
           <input id="hostModalPassword" type="password" placeholder="At least 4 characters" />
         </label>
-        <div class="row">
+        <div class="modal-actions">
           <button id="hostModalConfirm" type="button">Start now</button>
-          <button id="hostModalCancel" type="button" class="danger">Cancel</button>
+          <button id="hostModalCancel" type="button" class="ghost danger">Cancel</button>
         </div>
       </div>
     </div>
@@ -160,4 +242,3 @@
     <script src="./app.js"></script>
   </body>
 </html>
-

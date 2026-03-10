@@ -1,4 +1,5 @@
 const modeEl = document.getElementById('mode');
+const modeButtons = Array.from(document.querySelectorAll('.mode-chip'));
 const roomIdInputEl = document.getElementById('roomIdInput');
 const roomPasswordEl = document.getElementById('roomPassword');
 const connectRoomBtn = document.getElementById('joinRoom');
@@ -22,8 +23,10 @@ const hostModalCancelBtn = document.getElementById('hostModalCancel');
 
 const statusEl = document.getElementById('status');
 const updateStatusEl = document.getElementById('updateStatus');
+const statusBadgeEl = document.getElementById('statusBadge');
 const versionEl = document.getElementById('version');
 const hostStatsEl = document.getElementById('hostStats');
+const captureModeDisplayEl = document.getElementById('captureModeDisplay');
 
 const hostPanel = document.getElementById('hostPanel');
 const viewerPanel = document.getElementById('viewerPanel');
@@ -102,6 +105,14 @@ async function init() {
   updateHostStats();
 
   modeEl.addEventListener('change', onModeChange);
+  modeButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const nextMode = button.dataset.mode;
+      if (!nextMode || nextMode === modeEl.value) return;
+      modeEl.value = nextMode;
+      onModeChange();
+    });
+  });
   [codeServiceUrlEl, bitrateEl, latencyProfileEl].forEach((el) => el.addEventListener('change', onStreamingSettingsChanged));
 
   startBackendBtn.addEventListener('click', startBackendFromApp);
@@ -195,6 +206,9 @@ function syncModeUI() {
   connectivityWrapEl.classList.toggle('hidden', !isHost);
   latencyWrapEl.classList.toggle('hidden', !isHost);
   bitrateWrapEl.classList.toggle('hidden', !isHost);
+  modeButtons.forEach((button) => {
+    button.classList.toggle('active', button.dataset.mode === mode);
+  });
 
   videoEl.muted = isHost;
 }
@@ -203,6 +217,9 @@ function syncHostSourceUI() {
   const isDisplay = videoSourceEl.value === 'display';
   displaySourceEl.disabled = !isDisplay;
   cameraDeviceEl.disabled = isDisplay;
+  if (captureModeDisplayEl) {
+    captureModeDisplayEl.textContent = isDisplay ? 'Display / Window capture' : 'OBS Virtual Camera';
+  }
 }
 
 function setStatus(text, options = {}) {
@@ -210,6 +227,7 @@ function setStatus(text, options = {}) {
   if (!force && text === lastStatusText) return;
   lastStatusText = text;
   statusEl.textContent = text;
+  updateStatusBadge(text);
 }
 
 function setUpdateStatus(text, options = {}) {
@@ -217,6 +235,40 @@ function setUpdateStatus(text, options = {}) {
   if (!force && text === lastUpdateText) return;
   lastUpdateText = text;
   updateStatusEl.textContent = text;
+}
+
+function updateStatusBadge(text) {
+  if (!statusBadgeEl) return;
+
+  const normalized = String(text || '').toLowerCase();
+  statusBadgeEl.classList.remove('live', 'warn', 'error', 'neutral');
+
+  if (!normalized) {
+    statusBadgeEl.textContent = 'Idle';
+    statusBadgeEl.classList.add('neutral');
+    return;
+  }
+
+  if (normalized.includes('connected')) {
+    statusBadgeEl.textContent = 'Connected';
+    statusBadgeEl.classList.add('live');
+    return;
+  }
+
+  if (normalized.includes('error') || normalized.includes('failed') || normalized.includes('disconnected')) {
+    statusBadgeEl.textContent = 'Attention';
+    statusBadgeEl.classList.add('error');
+    return;
+  }
+
+  if (normalized.includes('waiting') || normalized.includes('checking') || normalized.includes('reconnect')) {
+    statusBadgeEl.textContent = 'Pending';
+    statusBadgeEl.classList.add('warn');
+    return;
+  }
+
+  statusBadgeEl.textContent = 'Idle';
+  statusBadgeEl.classList.add('neutral');
 }
 
 function wait(ms) {
