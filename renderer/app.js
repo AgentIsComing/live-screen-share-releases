@@ -97,7 +97,7 @@ async function init() {
 
   modeEl.value = localStorage.getItem(storageKeys.mode) || 'host';
   codeServiceUrlEl.value = localStorage.getItem(storageKeys.codeServiceUrl) || DEFAULT_CODE_SERVICE_URL;
-  bitrateEl.value = localStorage.getItem(storageKeys.bitrate) || '5000000';
+  bitrateEl.value = localStorage.getItem(storageKeys.bitrate) || '16000000';
   latencyProfileEl.value = localStorage.getItem(storageKeys.latencyProfile) || 'low';
 
   mode = modeEl.value;
@@ -758,7 +758,13 @@ function applyVideoSenderSettings(peer) {
     const encoding = (params.encodings && params.encodings[0]) || {};
     encoding.maxBitrate = maxBitrate;
     encoding.maxFramerate = profile.maxFps;
+    encoding.scaleResolutionDownBy = 1;
+    encoding.priority = 'high';
     encoding.networkPriority = 'high';
+    encoding.active = true;
+    if (profile.maxBitrate >= 20000000) {
+      encoding.maxQuantizationParameter = 34;
+    }
     params.encodings = [encoding];
     params.degradationPreference = 'maintain-resolution';
     sender.setParameters(params).catch(() => {});
@@ -877,7 +883,7 @@ async function captureDisplayStream(useDisplayAudio) {
       maxWidth: profile.maxWidth,
       minHeight: 720,
       maxHeight: profile.maxHeight,
-      minFrameRate: 20,
+      minFrameRate: 30,
       maxFrameRate: profile.maxFps
     }
   };
@@ -917,9 +923,9 @@ async function buildHostStream() {
     if (!cameraId) throw new Error('Select OBS Virtual Camera device first.');
 
     const profile = getLatencyProfile();
-    const obsMaxWidth = Math.min(profile.maxWidth, 1920);
-    const obsMaxHeight = Math.min(profile.maxHeight, 1080);
-    const obsMaxFps = audioMode === 'none' ? profile.maxFps : Math.min(profile.maxFps, 30);
+    const obsMaxWidth = profile.maxWidth;
+    const obsMaxHeight = profile.maxHeight;
+    const obsMaxFps = profile.maxFps;
 
     const camera = await navigator.mediaDevices.getUserMedia({
       video: {
@@ -1173,12 +1179,12 @@ async function manualCheckForUpdates() {
 function getLatencyProfile() {
   const modeName = latencyProfileEl.value;
   if (modeName === 'ultra') {
-    return { maxWidth: 1600, maxHeight: 900, maxFps: 30, maxBitrate: 4500000, playoutDelay: 0 };
+    return { maxWidth: 1920, maxHeight: 1080, maxFps: 60, maxBitrate: 12000000, playoutDelay: 0 };
   }
   if (modeName === 'low') {
-    return { maxWidth: 1920, maxHeight: 1080, maxFps: 30, maxBitrate: 6500000, playoutDelay: 0.02 };
+    return { maxWidth: 2560, maxHeight: 1440, maxFps: 60, maxBitrate: 18000000, playoutDelay: 0.01 };
   }
-  return { maxWidth: 2560, maxHeight: 1440, maxFps: 45, maxBitrate: 12000000, playoutDelay: 0.06 };
+  return { maxWidth: 3840, maxHeight: 2160, maxFps: 60, maxBitrate: 30000000, playoutDelay: 0.03 };
 }
 
 function tuneReceiversForLatency(peer) {
@@ -1187,6 +1193,9 @@ function tuneReceiversForLatency(peer) {
     if (receiver.track?.kind === 'video') {
       try {
         receiver.playoutDelayHint = profile.playoutDelay;
+      } catch {}
+      try {
+        receiver.jitterBufferTarget = 0;
       } catch {}
     }
   }
