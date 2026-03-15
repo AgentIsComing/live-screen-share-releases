@@ -83,12 +83,14 @@ let backendRunning = false;
 let backendStarting = false;
 let hostStarting = false;
 let suppressTrackEndedUntil = 0;
+let adaptiveTuneTimer = null;
 
 let localStream = null;
 let viewerPc = null;
 let viewerPendingIceCandidates = [];
 const hostPeers = new Map();
 const hostPendingIceCandidates = new Map();
+const adaptivePeerState = new Map();
 
 init();
 
@@ -98,7 +100,7 @@ async function init() {
   modeEl.value = localStorage.getItem(storageKeys.mode) || 'host';
   codeServiceUrlEl.value = localStorage.getItem(storageKeys.codeServiceUrl) || DEFAULT_CODE_SERVICE_URL;
   bitrateEl.value = localStorage.getItem(storageKeys.bitrate) || '16000000';
-  latencyProfileEl.value = localStorage.getItem(storageKeys.latencyProfile) || 'low';
+  latencyProfileEl.value = localStorage.getItem(storageKeys.latencyProfile) || 'auto';
 
   mode = modeEl.value;
   syncModeUI();
@@ -181,6 +183,7 @@ function persistInputs() {
 
 function onStreamingSettingsChanged() {
   persistInputs();
+  syncAdaptiveStreamingLoop();
   if (mode !== 'host' || !localStream) return;
   for (const peer of hostPeers.values()) {
     applyVideoSenderSettings(peer);
@@ -191,6 +194,7 @@ function onModeChange() {
   mode = modeEl.value;
   persistInputs();
   syncModeUI();
+  syncAdaptiveStreamingLoop();
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.close();
   }
@@ -277,8 +281,9 @@ function wait(ms) {
 
 function updateHostStats() {
   const peerCount = hostPeers.size;
+  const autoTuneActive = latencyProfileEl.value === 'auto' ? ' | Auto tune on' : '';
   hostStatsEl.textContent = mode === 'host'
-    ? `Connected viewers: ${peerCount}`
+    ? `Connected viewers: ${peerCount}${autoTuneActive}`
     : '';
 }
 
@@ -751,14 +756,18 @@ function makePeerConnection(role, targetViewerId = null) {
 
 function applyVideoSenderSettings(peer) {
   const profile = getLatencyProfile();
-  const maxBitrate = Math.min(Number(bitrateEl.value), profile.maxBitrate);
+  const adaptive = adaptivePeerState.get(getPeerIdForConnection(peer)) || {};
+  const maxBitrate = Math.min(
+    adaptive.targetBitrate || Number(bitrateEl.value),
+    profile.maxBitrate
+  );
   for (const sender of peer.getSenders()) {
     if (sender.track?.kind !== 'video') continue;
     const params = sender.getParameters() || {};
     const encoding = (params.encodings && params.encodings[0]) || {};
     encoding.maxBitrate = maxBitrate;
-    encoding.maxFramerate = profile.maxFps;
-    encoding.scaleResolutionDownBy = 1;
+    encoding.maxFramerate = adaptive.targetFps || profile.maxFps;
+    encoding.scaleResolutionDownBy = adaptive.scaleResolutionDownBy || 1;
     encoding.priority = 'high';
     encoding.networkPriority = 'high';
     encoding.active = true;
@@ -791,6 +800,13 @@ function syncPeerTracks(peer, stream) {
   applyVideoSenderSettings(peer);
 }
 
+function getPeerIdForConnection(peer) {
+  for (const [viewerId, mappedPeer] of hostPeers.entries()) {
+    if (mappedPeer === peer) return viewerId;
+  }
+  return null;
+}
+
 function closeHostPeer(viewerId) {
   if (!viewerId) return;
   const peer = hostPeers.get(viewerId);
@@ -799,7 +815,9 @@ function closeHostPeer(viewerId) {
   }
   hostPeers.delete(viewerId);
   hostPendingIceCandidates.delete(viewerId);
+  adaptivePeerState.delete(viewerId);
   updateHostStats();
+  syncAdaptiveStreamingLoop();
 }
 
 function closeAllHostPeers() {
@@ -808,7 +826,9 @@ function closeAllHostPeers() {
     hostPeers.delete(viewerId);
   }
   hostPendingIceCandidates.clear();
+  adaptivePeerState.clear();
   updateHostStats();
+  syncAdaptiveStreamingLoop();
 }
 
 function resetViewerPeer() {
@@ -1006,6 +1026,7 @@ async function startHost() {
   stopHostBtn.disabled = false;
 
   setStatus('Hosting started. Share Room ID + password.');
+  syncAdaptiveStreamingLoop();
 }
 
 async function rebuildHostStreamForActiveSession() {
@@ -1042,6 +1063,7 @@ function stopHost(sendSignal) {
   stopTracks(localStream);
   localStream = null;
   closeAllHostPeers();
+  stopAdaptiveStreamingLoop();
 
   videoEl.srcObject = null;
   startHostBtn.disabled = false;
@@ -1093,8 +1115,10 @@ function createHostPeer(viewerId) {
   const peer = makePeerConnection('host', viewerId);
   hostPeers.set(viewerId, peer);
   hostPendingIceCandidates.set(viewerId, hostPendingIceCandidates.get(viewerId) || []);
+  adaptivePeerState.set(viewerId, {});
   syncPeerTracks(peer, localStream);
   updateHostStats();
+  syncAdaptiveStreamingLoop();
   return peer;
 }
 
@@ -1178,6 +1202,9 @@ async function manualCheckForUpdates() {
 
 function getLatencyProfile() {
   const modeName = latencyProfileEl.value;
+  if (modeName === 'auto') {
+    return { maxWidth: 3840, maxHeight: 2160, maxFps: 60, maxBitrate: 30000000, playoutDelay: 0.01 };
+  }
   if (modeName === 'ultra') {
     return { maxWidth: 1920, maxHeight: 1080, maxFps: 60, maxBitrate: 12000000, playoutDelay: 0 };
   }
@@ -1199,5 +1226,89 @@ function tuneReceiversForLatency(peer) {
       } catch {}
     }
   }
+}
+
+function syncAdaptiveStreamingLoop() {
+  updateHostStats();
+  if (mode !== 'host' || !localStream || latencyProfileEl.value !== 'auto' || hostPeers.size === 0) {
+    stopAdaptiveStreamingLoop();
+    return;
+  }
+  if (adaptiveTuneTimer) return;
+  adaptiveTuneTimer = setInterval(() => {
+    runAdaptiveStreamingPass().catch(() => {});
+  }, 2500);
+  runAdaptiveStreamingPass().catch(() => {});
+}
+
+function stopAdaptiveStreamingLoop() {
+  if (adaptiveTuneTimer) {
+    clearInterval(adaptiveTuneTimer);
+    adaptiveTuneTimer = null;
+  }
+}
+
+async function runAdaptiveStreamingPass() {
+  if (latencyProfileEl.value !== 'auto' || mode !== 'host' || !localStream) return;
+  for (const [viewerId, peer] of hostPeers.entries()) {
+    if (!peer || peer.connectionState !== 'connected') continue;
+    const adaptiveSettings = await measureAdaptiveSettings(peer);
+    adaptivePeerState.set(viewerId, adaptiveSettings);
+    applyVideoSenderSettings(peer);
+  }
+}
+
+async function measureAdaptiveSettings(peer) {
+  const profile = getLatencyProfile();
+  const manualCap = Math.min(Number(bitrateEl.value), profile.maxBitrate);
+  const stats = await peer.getStats();
+
+  let availableOutgoingBitrate = 0;
+  let roundTripTime = 0;
+  let packetsLostRatio = 0;
+
+  for (const report of stats.values()) {
+    if (report.type === 'candidate-pair' && (report.nominated || report.selected)) {
+      availableOutgoingBitrate = Math.max(availableOutgoingBitrate, Number(report.availableOutgoingBitrate) || 0);
+      roundTripTime = Math.max(roundTripTime, Number(report.currentRoundTripTime) || 0);
+    }
+    if (report.type === 'remote-inbound-rtp' && report.kind === 'video') {
+      roundTripTime = Math.max(roundTripTime, Number(report.roundTripTime) || 0);
+      if (typeof report.fractionLost === 'number') {
+        packetsLostRatio = Math.max(packetsLostRatio, Number(report.fractionLost) || 0);
+      }
+    }
+  }
+
+  const networkCap = availableOutgoingBitrate > 0 ? Math.min(availableOutgoingBitrate * 0.82, manualCap) : manualCap;
+  let targetBitrate = Math.max(3_500_000, networkCap);
+  let targetFps = 60;
+  let scaleResolutionDownBy = 1;
+
+  if (packetsLostRatio > 0.08 || roundTripTime > 0.18) {
+    targetBitrate = Math.max(3_500_000, networkCap * 0.42);
+    targetFps = 24;
+    scaleResolutionDownBy = 2;
+  } else if (packetsLostRatio > 0.045 || roundTripTime > 0.12) {
+    targetBitrate = Math.max(5_000_000, networkCap * 0.58);
+    targetFps = 30;
+    scaleResolutionDownBy = 1.5;
+  } else if (packetsLostRatio > 0.02 || roundTripTime > 0.08) {
+    targetBitrate = Math.max(7_000_000, networkCap * 0.72);
+    targetFps = 45;
+    scaleResolutionDownBy = 1.25;
+  } else {
+    targetBitrate = Math.max(8_000_000, networkCap * 0.9);
+    targetFps = profile.maxFps;
+    scaleResolutionDownBy = 1;
+  }
+
+  return {
+    targetBitrate: Math.round(Math.min(targetBitrate, profile.maxBitrate)),
+    targetFps,
+    scaleResolutionDownBy,
+    roundTripTime,
+    packetsLostRatio
+  };
 }
 
