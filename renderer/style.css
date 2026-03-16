@@ -477,6 +477,36 @@ video {
   background: transparent;
 }
 
+#annotationCanvas {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+#annotationCanvas.draw-enabled {
+  pointer-events: auto;
+  cursor: crosshair;
+}
+
+.annotation-hint {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  z-index: 4;
+  max-width: min(560px, 88%);
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(9, 13, 19, 0.62);
+  color: #dbe8ff;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  backdrop-filter: blur(4px);
+}
+
 .version-panel small {
   color: var(--muted);
 }

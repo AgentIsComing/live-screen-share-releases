@@ -43,6 +43,8 @@ const stopHostBtn = document.getElementById('stopHost');
 const bitrateEl = document.getElementById('bitrate');
 const latencyProfileEl = document.getElementById('latencyProfile');
 const videoEl = document.getElementById('video');
+const annotationCanvasEl = document.getElementById('annotationCanvas');
+const annotationHintEl = document.getElementById('annotationHint');
 
 const DEFAULT_CODE_SERVICE_URL = 'https://live-screen-share-code-service.jaydenrmaine.workers.dev';
 
@@ -85,6 +87,14 @@ let hostStarting = false;
 let suppressTrackEndedUntil = 0;
 let adaptiveTuneTimer = null;
 let adaptiveTuneInFlight = false;
+let hostAllowsViewerDrawing = false;
+let viewerDrawingEnabled = false;
+let annotationPointerActive = false;
+let annotationStrokeId = null;
+let annotationStrokeWidth = 3;
+let annotationContext = null;
+let annotationCanvasW = 0;
+let annotationCanvasH = 0;
 
 let localStream = null;
 let viewerPc = null;
@@ -93,6 +103,9 @@ const hostPeers = new Map();
 const hostPendingIceCandidates = new Map();
 const adaptivePeerState = new Map();
 const hostPeerDisconnectTimers = new Map();
+const annotationStrokeState = new Map();
+const annotationSegments = [];
+const MAX_ANNOTATION_SEGMENTS = 4000;
 
 init();
 
@@ -157,8 +170,18 @@ async function init() {
 
   startHostBtn.addEventListener('click', startHostWithPrompt);
   stopHostBtn.addEventListener('click', () => stopHost(true));
+  document.addEventListener('keydown', onGlobalKeydown);
+  window.addEventListener('resize', resizeAnnotationCanvas);
+  videoEl.addEventListener('loadedmetadata', resizeAnnotationCanvas);
+  annotationCanvasEl.addEventListener('pointerdown', onAnnotationPointerDown);
+  annotationCanvasEl.addEventListener('pointermove', onAnnotationPointerMove);
+  annotationCanvasEl.addEventListener('pointerup', onAnnotationPointerUp);
+  annotationCanvasEl.addEventListener('pointercancel', onAnnotationPointerUp);
+  annotationCanvasEl.addEventListener('pointerleave', onAnnotationPointerUp);
 
   syncHostSourceUI();
+  updateAnnotationPermissionUI();
+  resizeAnnotationCanvas();
   setTimeout(() => {
     refreshDevices(false).catch((error) => setStatus('Refresh devices failed: ' + (error?.message || error)));
   }, 0);
@@ -197,6 +220,8 @@ function onModeChange() {
   persistInputs();
   syncModeUI();
   syncAdaptiveStreamingLoop();
+  clearAnnotationOverlay();
+  updateAnnotationPermissionUI();
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.close();
   }
@@ -217,6 +242,358 @@ function syncModeUI() {
   });
 
   videoEl.muted = isHost;
+}
+
+function onGlobalKeydown(event) {
+  if (mode !== 'host') return;
+  if (!event.ctrlKey || !event.shiftKey) return;
+  if (event.repeat) return;
+  if (String(event.key || '').toLowerCase() !== 'd') return;
+
+  event.preventDefault();
+  hostAllowsViewerDrawing = !hostAllowsViewerDrawing;
+  updateAnnotationPermissionUI();
+  broadcastDrawingPermission();
+  setStatus(hostAllowsViewerDrawing
+    ? 'Viewer drawing enabled. Press Ctrl+Shift+D to lock drawing.'
+    : 'Viewer drawing locked. Press Ctrl+Shift+D to allow drawing.');
+}
+
+function updateAnnotationPermissionUI() {
+  if (!annotationCanvasEl || !annotationHintEl) return;
+  const drawingAllowedOnThisClient = mode === 'viewer' && viewerDrawingEnabled;
+  annotationCanvasEl.classList.toggle('draw-enabled', drawingAllowedOnThisClient);
+
+  if (mode === 'host') {
+    annotationHintEl.textContent = hostAllowsViewerDrawing
+      ? 'Viewer drawing: ON (Ctrl+Shift+D to lock)'
+      : 'Viewer drawing: OFF (Ctrl+Shift+D to allow)';
+    return;
+  }
+
+  annotationHintEl.textContent = viewerDrawingEnabled
+    ? 'Drawing enabled by host. Hold left-click and draw.'
+    : 'Host has drawing locked.';
+}
+
+function resizeAnnotationCanvas() {
+  if (!annotationCanvasEl) return;
+  const rect = annotationCanvasEl.getBoundingClientRect();
+  const cssWidth = Math.max(1, Math.round(rect.width));
+  const cssHeight = Math.max(1, Math.round(rect.height));
+  const dpr = window.devicePixelRatio || 1;
+  const targetWidth = Math.max(1, Math.round(cssWidth * dpr));
+  const targetHeight = Math.max(1, Math.round(cssHeight * dpr));
+
+  if (annotationCanvasW === targetWidth && annotationCanvasH === targetHeight && annotationContext) {
+    return;
+  }
+
+  annotationCanvasW = targetWidth;
+  annotationCanvasH = targetHeight;
+  annotationCanvasEl.width = targetWidth;
+  annotationCanvasEl.height = targetHeight;
+
+  annotationContext = annotationCanvasEl.getContext('2d');
+  if (!annotationContext) return;
+  annotationContext.setTransform(dpr, 0, 0, dpr, 0, 0);
+  redrawAllAnnotationSegments();
+}
+
+function clearAnnotationOverlay() {
+  annotationStrokeState.clear();
+  annotationSegments.length = 0;
+  if (!annotationContext) {
+    resizeAnnotationCanvas();
+  }
+  if (annotationContext) {
+    annotationContext.clearRect(0, 0, annotationCanvasEl.clientWidth, annotationCanvasEl.clientHeight);
+  }
+}
+
+function getVideoContentRect() {
+  const width = videoEl.clientWidth || annotationCanvasEl.clientWidth || 1;
+  const height = videoEl.clientHeight || annotationCanvasEl.clientHeight || 1;
+  const videoWidth = videoEl.videoWidth || 16;
+  const videoHeight = videoEl.videoHeight || 9;
+
+  let drawWidth = width;
+  let drawHeight = drawWidth * (videoHeight / videoWidth);
+  if (drawHeight > height) {
+    drawHeight = height;
+    drawWidth = drawHeight * (videoWidth / videoHeight);
+  }
+
+  return {
+    x: (width - drawWidth) / 2,
+    y: (height - drawHeight) / 2,
+    width: drawWidth,
+    height: drawHeight
+  };
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function toNormalizedPoint(event) {
+  const canvasRect = annotationCanvasEl.getBoundingClientRect();
+  if (!canvasRect.width || !canvasRect.height) return null;
+
+  const pointerX = event.clientX - canvasRect.left;
+  const pointerY = event.clientY - canvasRect.top;
+  const videoRect = getVideoContentRect();
+  if (videoRect.width <= 0 || videoRect.height <= 0) return null;
+
+  if (
+    pointerX < videoRect.x
+    || pointerX > videoRect.x + videoRect.width
+    || pointerY < videoRect.y
+    || pointerY > videoRect.y + videoRect.height
+  ) {
+    return null;
+  }
+
+  return {
+    x: clamp01((pointerX - videoRect.x) / videoRect.width),
+    y: clamp01((pointerY - videoRect.y) / videoRect.height)
+  };
+}
+
+function toCanvasPoint(point) {
+  const videoRect = getVideoContentRect();
+  return {
+    x: videoRect.x + (clamp01(point.x) * videoRect.width),
+    y: videoRect.y + (clamp01(point.y) * videoRect.height)
+  };
+}
+
+function drawAnnotationSegmentRaw(fromPoint, toPoint, color = '#ff6b57', width = 3) {
+  if (!annotationContext) {
+    resizeAnnotationCanvas();
+  }
+  if (!annotationContext) return;
+
+  const fromCanvas = toCanvasPoint(fromPoint);
+  const toCanvas = toCanvasPoint(toPoint);
+  annotationContext.strokeStyle = color;
+  annotationContext.lineWidth = width;
+  annotationContext.lineCap = 'round';
+  annotationContext.lineJoin = 'round';
+  annotationContext.shadowColor = 'rgba(255, 107, 87, 0.22)';
+  annotationContext.shadowBlur = 3;
+  annotationContext.beginPath();
+  annotationContext.moveTo(fromCanvas.x, fromCanvas.y);
+  annotationContext.lineTo(toCanvas.x, toCanvas.y);
+  annotationContext.stroke();
+  annotationContext.shadowBlur = 0;
+}
+
+function pushAndDrawAnnotationSegment(segment) {
+  annotationSegments.push(segment);
+  if (annotationSegments.length > MAX_ANNOTATION_SEGMENTS) {
+    annotationSegments.splice(0, annotationSegments.length - MAX_ANNOTATION_SEGMENTS);
+  }
+  drawAnnotationSegmentRaw(segment.from, segment.to, segment.color, segment.width);
+}
+
+function redrawAllAnnotationSegments() {
+  if (!annotationContext) return;
+  annotationContext.clearRect(0, 0, annotationCanvasEl.clientWidth, annotationCanvasEl.clientHeight);
+  for (const segment of annotationSegments) {
+    drawAnnotationSegmentRaw(segment.from, segment.to, segment.color, segment.width);
+  }
+}
+
+function sendDrawSignal(payload) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({
+    type: 'signal',
+    data: {
+      from: clientId,
+      draw: payload
+    }
+  }));
+}
+
+function onAnnotationPointerDown(event) {
+  if (mode !== 'viewer' || !viewerDrawingEnabled || !ws || ws.readyState !== WebSocket.OPEN) return;
+  if (event.button !== 0) return;
+
+  const point = toNormalizedPoint(event);
+  if (!point) return;
+
+  annotationPointerActive = true;
+  annotationStrokeId = `${clientId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  annotationCanvasEl.setPointerCapture(event.pointerId);
+
+  sendDrawSignal({
+    type: 'stroke-start',
+    strokeId: annotationStrokeId,
+    point,
+    color: '#ff6b57',
+    width: annotationStrokeWidth
+  });
+}
+
+function onAnnotationPointerMove(event) {
+  if (!annotationPointerActive || !annotationStrokeId || mode !== 'viewer' || !viewerDrawingEnabled) return;
+  const point = toNormalizedPoint(event);
+  if (!point) return;
+
+  sendDrawSignal({
+    type: 'stroke-move',
+    strokeId: annotationStrokeId,
+    point,
+    color: '#ff6b57',
+    width: annotationStrokeWidth
+  });
+}
+
+function onAnnotationPointerUp(event) {
+  if (!annotationPointerActive || !annotationStrokeId || mode !== 'viewer') return;
+  const point = toNormalizedPoint(event);
+  sendDrawSignal({
+    type: 'stroke-end',
+    strokeId: annotationStrokeId,
+    point,
+    color: '#ff6b57',
+    width: annotationStrokeWidth
+  });
+
+  annotationPointerActive = false;
+  annotationStrokeId = null;
+  try {
+    annotationCanvasEl.releasePointerCapture(event.pointerId);
+  } catch {}
+}
+
+function handleDrawEvent(drawEvent) {
+  if (!drawEvent || !drawEvent.strokeId || !drawEvent.type) return;
+  const strokeId = drawEvent.strokeId;
+  const color = drawEvent.color || '#ff6b57';
+  const width = Number(drawEvent.width) || annotationStrokeWidth;
+
+  if (drawEvent.type === 'stroke-start') {
+    if (!drawEvent.point) return;
+    annotationStrokeState.set(strokeId, {
+      point: drawEvent.point,
+      color,
+      width
+    });
+    return;
+  }
+
+  if (drawEvent.type === 'stroke-move' || drawEvent.type === 'stroke-end') {
+    const state = annotationStrokeState.get(strokeId);
+    const nextPoint = drawEvent.point || state?.point;
+    if (!state || !nextPoint) {
+      if (drawEvent.type === 'stroke-end') {
+        annotationStrokeState.delete(strokeId);
+      }
+      return;
+    }
+
+    const segment = {
+      from: state.point,
+      to: nextPoint,
+      color,
+      width
+    };
+    pushAndDrawAnnotationSegment(segment);
+    annotationStrokeState.set(strokeId, {
+      point: nextPoint,
+      color,
+      width
+    });
+
+    if (drawEvent.type === 'stroke-end') {
+      annotationStrokeState.delete(strokeId);
+    }
+  }
+}
+
+function sendDrawPermissionToViewer(viewerId) {
+  if (!viewerId || !ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({
+    type: 'signal',
+    data: {
+      from: clientId,
+      to: viewerId,
+      draw: {
+        type: 'permission',
+        allowed: hostAllowsViewerDrawing
+      }
+    }
+  }));
+}
+
+function broadcastDrawingPermission() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  for (const viewerId of hostPeers.keys()) {
+    sendDrawPermissionToViewer(viewerId);
+  }
+  if (!hostAllowsViewerDrawing) {
+    clearAnnotationOverlay();
+    for (const viewerId of hostPeers.keys()) {
+      ws.send(JSON.stringify({
+        type: 'signal',
+        data: {
+          from: clientId,
+          to: viewerId,
+          draw: {
+            type: 'clear'
+          }
+        }
+      }));
+    }
+  }
+}
+
+function handleHostDrawSignal(drawPayload) {
+  if (!drawPayload || !drawPayload.type) return;
+  if (drawPayload.type === 'permission') {
+    viewerDrawingEnabled = Boolean(drawPayload.allowed);
+    if (!viewerDrawingEnabled) {
+      annotationPointerActive = false;
+      annotationStrokeId = null;
+    }
+    updateAnnotationPermissionUI();
+    return;
+  }
+
+  if (drawPayload.type === 'clear') {
+    clearAnnotationOverlay();
+    return;
+  }
+
+  if (drawPayload.type.startsWith('stroke-')) {
+    handleDrawEvent(drawPayload);
+  }
+}
+
+function handleViewerDrawSignal(fromViewerId, drawPayload) {
+  if (!drawPayload || !drawPayload.type) return;
+  if (!hostAllowsViewerDrawing) return;
+  if (drawPayload.type === 'clear') {
+    clearAnnotationOverlay();
+  }
+
+  if (drawPayload.type.startsWith('stroke-')) {
+    handleDrawEvent(drawPayload);
+  }
+
+  for (const viewerId of hostPeers.keys()) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) break;
+    ws.send(JSON.stringify({
+      type: 'signal',
+      data: {
+        from: clientId,
+        to: viewerId,
+        draw: drawPayload
+      }
+    }));
+  }
 }
 
 function syncHostSourceUI() {
@@ -1090,6 +1467,7 @@ async function startHost() {
   stopHostBtn.disabled = false;
 
   setStatus('Hosting started. Share Room ID + password.');
+  updateAnnotationPermissionUI();
   syncAdaptiveStreamingLoop();
 }
 
@@ -1115,6 +1493,7 @@ async function rebuildHostStreamForActiveSession() {
   // Avoid false host-stop when old tracks end during source switch.
   suppressTrackEndedUntil = Date.now() + 2500;
   stopTracks(oldStream);
+  clearAnnotationOverlay();
   setStatus('Source updated while live.');
 }
 
@@ -1138,6 +1517,7 @@ function stopHost(sendSignal) {
   }
 
   hostStarting = false;
+  clearAnnotationOverlay();
   setStatus('Hosting stopped.');
 }
 
@@ -1171,6 +1551,9 @@ async function startViewer() {
 function stopViewer() {
   resetViewerPeer();
   videoEl.srcObject = null;
+  viewerDrawingEnabled = false;
+  updateAnnotationPermissionUI();
+  clearAnnotationOverlay();
   viewerFormEl.classList.remove('hidden');
 }
 
@@ -1181,6 +1564,7 @@ function createHostPeer(viewerId) {
   hostPendingIceCandidates.set(viewerId, hostPendingIceCandidates.get(viewerId) || []);
   adaptivePeerState.set(viewerId, createInitialAdaptiveState());
   syncPeerTracks(peer, localStream);
+  sendDrawPermissionToViewer(viewerId);
   updateHostStats();
   syncAdaptiveStreamingLoop();
   return peer;
@@ -1192,6 +1576,11 @@ async function handleSignal(data) {
   try {
     if (mode === 'host') {
       if (!localStream) return;
+
+      if (data.draw && data.from) {
+        handleViewerDrawSignal(data.from, data.draw);
+        return;
+      }
 
       if (data.offer && data.from) {
         const viewerId = data.from;
@@ -1222,6 +1611,11 @@ async function handleSignal(data) {
 
     if (mode === 'viewer') {
       if (data.to && data.to !== clientId) return;
+
+      if (data.draw) {
+        handleHostDrawSignal(data.draw);
+        return;
+      }
 
       if (!viewerPc) {
         if (!data.answer && !data.candidate) return;
