@@ -772,15 +772,19 @@ function applyVideoSenderSettings(peer) {
   const activeViewerCount = Math.max(connectedPeers.length, 1);
   const manualCap = Math.min(Number(bitrateEl.value), profile.maxBitrate);
   const perViewerBudget = activeViewerCount > 1
-    ? Math.max(4_500_000, Math.round((manualCap * 0.92) / activeViewerCount))
+    ? Math.max(2_200_000, Math.round((manualCap * 0.9) / activeViewerCount))
     : manualCap;
   const maxBitrate = Math.min(
     adaptive.targetBitrate || manualCap,
     profile.maxBitrate,
     perViewerBudget
   );
-  const maxFramerate = adaptive.targetFps || profile.maxFps;
-  const scaleResolutionDownBy = adaptive.scaleResolutionDownBy || 1;
+  const framerateBudgetCap = activeViewerCount > 1 ? Math.min(profile.maxFps, 45) : profile.maxFps;
+  const maxFramerate = Math.min(adaptive.targetFps || profile.maxFps, framerateBudgetCap);
+  let scaleResolutionDownBy = adaptive.scaleResolutionDownBy || 1;
+  if (activeViewerCount > 1 && scaleResolutionDownBy < 1.15) {
+    scaleResolutionDownBy = 1.15;
+  }
   for (const sender of peer.getSenders()) {
     if (sender.track?.kind !== 'video') continue;
     const params = sender.getParameters() || {};
@@ -1331,7 +1335,7 @@ function createInitialAdaptiveState() {
     smoothedPacketsLostRatio: 0,
     poorPasses: 0,
     goodPasses: 0,
-    targetBitrate: 12000000,
+    targetBitrate: 9000000,
     targetFps: 60,
     scaleResolutionDownBy: 1,
     lastAppliedAt: 0
@@ -1358,6 +1362,11 @@ function clamp(value, min, max) {
 async function measureAdaptiveSettings(peer, previousState) {
   const profile = getLatencyProfile();
   const manualCap = Math.min(Number(bitrateEl.value), profile.maxBitrate);
+  const connectedViewerCount = Math.max(
+    1,
+    Array.from(hostPeers.values()).filter((hostPeer) => hostPeer.connectionState === 'connected').length
+  );
+  const minBitrate = connectedViewerCount > 1 ? 1_800_000 : 2_500_000;
   const stats = await peer.getStats();
 
   let availableOutgoingBitrate = 0;
@@ -1382,11 +1391,11 @@ async function measureAdaptiveSettings(peer, previousState) {
   const smoothedRoundTripTime = smoothValue(previousState.smoothedRoundTripTime, roundTripTime, 0.2, 0.35);
   const smoothedPacketsLostRatio = smoothValue(previousState.smoothedPacketsLostRatio, packetsLostRatio, 0.22, 0.38);
   const networkCap = availableOutgoingBitrate > 0 ? Math.min(availableOutgoingBitrate * 0.9, manualCap) : manualCap;
-  const warmupBitrateFloor = Math.min(manualCap, 10000000);
+  const warmupBitrateFloor = Math.min(manualCap, connectedViewerCount > 1 ? 6_500_000 : 8_500_000);
   let poorPasses = previousState.poorPasses || 0;
   let goodPasses = previousState.goodPasses || 0;
   let targetBitrate = Math.max(warmupBitrateFloor, networkCap);
-  let targetFps = profile.maxFps;
+  let targetFps = connectedViewerCount > 1 ? Math.min(profile.maxFps, 45) : profile.maxFps;
   let scaleResolutionDownBy = 1;
 
   const severe = smoothedPacketsLostRatio > 0.08 || smoothedRoundTripTime > 0.2;
@@ -1408,20 +1417,21 @@ async function measureAdaptiveSettings(peer, previousState) {
     targetBitrate = clamp(networkCap, warmupBitrateFloor, manualCap);
     targetFps = profile.maxFps;
   } else if (severe && poorPasses >= 2) {
-    targetBitrate = Math.max(6_000_000, networkCap * 0.62);
-    targetFps = 30;
-    scaleResolutionDownBy = poorPasses >= 4 ? 1.5 : 1.25;
+    targetBitrate = Math.max(minBitrate, networkCap * 0.5);
+    targetFps = 24;
+    scaleResolutionDownBy = poorPasses >= 4 ? 1.75 : 1.4;
   } else if (moderate && poorPasses >= 2) {
-    targetBitrate = Math.max(8_000_000, networkCap * 0.74);
-    targetFps = 45;
-    scaleResolutionDownBy = 1;
+    targetBitrate = Math.max(Math.round(minBitrate * 1.4), networkCap * 0.65);
+    targetFps = 30;
+    scaleResolutionDownBy = 1.25;
   } else if (mild) {
-    targetBitrate = Math.max(10_000_000, networkCap * 0.85);
+    targetBitrate = Math.max(Math.round(minBitrate * 1.8), networkCap * 0.8);
     targetFps = 45;
+    scaleResolutionDownBy = connectedViewerCount > 1 ? 1.2 : 1.1;
   } else {
-    targetBitrate = Math.max(11_000_000, networkCap * 0.94);
-    targetFps = profile.maxFps;
-    scaleResolutionDownBy = 1;
+    targetBitrate = Math.max(Math.round(minBitrate * 2.1), networkCap * 0.92);
+    targetFps = connectedViewerCount > 1 ? Math.min(profile.maxFps, 45) : profile.maxFps;
+    scaleResolutionDownBy = connectedViewerCount > 1 ? 1.15 : 1;
   }
 
   if (goodPasses >= 3) {
@@ -1431,14 +1441,14 @@ async function measureAdaptiveSettings(peer, previousState) {
 
   targetBitrate = clamp(
     smoothValue(previousState.targetBitrate, targetBitrate, 0.18, 0.32),
-    6_000_000,
+    minBitrate,
     manualCap
   );
   targetFps = Math.round(clamp(smoothValue(previousState.targetFps, targetFps, 0.25, 0.4), 30, profile.maxFps));
   scaleResolutionDownBy = clamp(
     smoothValue(previousState.scaleResolutionDownBy, scaleResolutionDownBy, 0.2, 0.45),
     1,
-    1.5
+    1.75
   );
 
   return {
