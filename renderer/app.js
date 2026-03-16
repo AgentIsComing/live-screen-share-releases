@@ -84,6 +84,7 @@ let backendStarting = false;
 let hostStarting = false;
 let suppressTrackEndedUntil = 0;
 let adaptiveTuneTimer = null;
+let adaptiveTuneInFlight = false;
 
 let localStream = null;
 let viewerPc = null;
@@ -761,21 +762,38 @@ function applyVideoSenderSettings(peer) {
     adaptive.targetBitrate || Number(bitrateEl.value),
     profile.maxBitrate
   );
+  const maxFramerate = adaptive.targetFps || profile.maxFps;
+  const scaleResolutionDownBy = adaptive.scaleResolutionDownBy || 1;
   for (const sender of peer.getSenders()) {
     if (sender.track?.kind !== 'video') continue;
     const params = sender.getParameters() || {};
-    const encoding = (params.encodings && params.encodings[0]) || {};
+    const currentEncoding = (params.encodings && params.encodings[0]) || {};
+    const encoding = { ...currentEncoding };
     encoding.maxBitrate = maxBitrate;
-    encoding.maxFramerate = adaptive.targetFps || profile.maxFps;
-    encoding.scaleResolutionDownBy = adaptive.scaleResolutionDownBy || 1;
+    encoding.maxFramerate = maxFramerate;
+    encoding.scaleResolutionDownBy = scaleResolutionDownBy;
     encoding.priority = 'high';
     encoding.networkPriority = 'high';
     encoding.active = true;
     if (profile.maxBitrate >= 20000000) {
       encoding.maxQuantizationParameter = 34;
     }
+
+    const bitrateDelta = Math.abs((currentEncoding.maxBitrate || 0) - maxBitrate);
+    const fpsDelta = Math.abs((currentEncoding.maxFramerate || 0) - maxFramerate);
+    const scaleDelta = Math.abs((currentEncoding.scaleResolutionDownBy || 1) - scaleResolutionDownBy);
+    const degradationPreference = latencyProfileEl.value === 'auto' ? 'balanced' : 'maintain-resolution';
+    if (
+      bitrateDelta < 350000
+      && fpsDelta < 6
+      && scaleDelta < 0.24
+      && params.degradationPreference === degradationPreference
+    ) {
+      continue;
+    }
+
     params.encodings = [encoding];
-    params.degradationPreference = 'maintain-resolution';
+    params.degradationPreference = degradationPreference;
     sender.setParameters(params).catch(() => {});
   }
 }
@@ -1115,7 +1133,7 @@ function createHostPeer(viewerId) {
   const peer = makePeerConnection('host', viewerId);
   hostPeers.set(viewerId, peer);
   hostPendingIceCandidates.set(viewerId, hostPendingIceCandidates.get(viewerId) || []);
-  adaptivePeerState.set(viewerId, {});
+  adaptivePeerState.set(viewerId, createInitialAdaptiveState());
   syncPeerTracks(peer, localStream);
   updateHostStats();
   syncAdaptiveStreamingLoop();
@@ -1203,7 +1221,7 @@ async function manualCheckForUpdates() {
 function getLatencyProfile() {
   const modeName = latencyProfileEl.value;
   if (modeName === 'auto') {
-    return { maxWidth: 3840, maxHeight: 2160, maxFps: 60, maxBitrate: 30000000, playoutDelay: 0.01 };
+    return { maxWidth: 1920, maxHeight: 1080, maxFps: 60, maxBitrate: 16000000, playoutDelay: 0.01 };
   }
   if (modeName === 'ultra') {
     return { maxWidth: 1920, maxHeight: 1080, maxFps: 60, maxBitrate: 12000000, playoutDelay: 0 };
@@ -1246,19 +1264,56 @@ function stopAdaptiveStreamingLoop() {
     clearInterval(adaptiveTuneTimer);
     adaptiveTuneTimer = null;
   }
+  adaptiveTuneInFlight = false;
 }
 
 async function runAdaptiveStreamingPass() {
-  if (latencyProfileEl.value !== 'auto' || mode !== 'host' || !localStream) return;
+  if (adaptiveTuneInFlight || latencyProfileEl.value !== 'auto' || mode !== 'host' || !localStream) return;
+  adaptiveTuneInFlight = true;
+  try {
   for (const [viewerId, peer] of hostPeers.entries()) {
     if (!peer || peer.connectionState !== 'connected') continue;
-    const adaptiveSettings = await measureAdaptiveSettings(peer);
+    const adaptiveSettings = await measureAdaptiveSettings(peer, adaptivePeerState.get(viewerId) || createInitialAdaptiveState());
     adaptivePeerState.set(viewerId, adaptiveSettings);
     applyVideoSenderSettings(peer);
   }
+  } finally {
+    adaptiveTuneInFlight = false;
+  }
 }
 
-async function measureAdaptiveSettings(peer) {
+function createInitialAdaptiveState() {
+  return {
+    connectedAt: Date.now(),
+    smoothedRoundTripTime: 0,
+    smoothedPacketsLostRatio: 0,
+    poorPasses: 0,
+    goodPasses: 0,
+    targetBitrate: 12000000,
+    targetFps: 60,
+    scaleResolutionDownBy: 1,
+    lastAppliedAt: 0
+  };
+}
+
+function normalizePacketsLostRatio(value) {
+  const parsed = Number(value) || 0;
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  if (parsed > 1) return Math.min(parsed / 256, 1);
+  return Math.min(parsed, 1);
+}
+
+function smoothValue(previousValue, nextValue, riseFactor, fallFactor) {
+  if (!previousValue) return nextValue;
+  const factor = nextValue >= previousValue ? riseFactor : fallFactor;
+  return previousValue + ((nextValue - previousValue) * factor);
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+async function measureAdaptiveSettings(peer, previousState) {
   const profile = getLatencyProfile();
   const manualCap = Math.min(Number(bitrateEl.value), profile.maxBitrate);
   const stats = await peer.getStats();
@@ -1275,40 +1330,87 @@ async function measureAdaptiveSettings(peer) {
     if (report.type === 'remote-inbound-rtp' && report.kind === 'video') {
       roundTripTime = Math.max(roundTripTime, Number(report.roundTripTime) || 0);
       if (typeof report.fractionLost === 'number') {
-        packetsLostRatio = Math.max(packetsLostRatio, Number(report.fractionLost) || 0);
+        packetsLostRatio = Math.max(packetsLostRatio, normalizePacketsLostRatio(report.fractionLost));
       }
     }
   }
 
-  const networkCap = availableOutgoingBitrate > 0 ? Math.min(availableOutgoingBitrate * 0.82, manualCap) : manualCap;
-  let targetBitrate = Math.max(3_500_000, networkCap);
-  let targetFps = 60;
+  const connectedAt = previousState.connectedAt || Date.now();
+  const connectionAgeMs = Date.now() - connectedAt;
+  const smoothedRoundTripTime = smoothValue(previousState.smoothedRoundTripTime, roundTripTime, 0.2, 0.35);
+  const smoothedPacketsLostRatio = smoothValue(previousState.smoothedPacketsLostRatio, packetsLostRatio, 0.22, 0.38);
+  const networkCap = availableOutgoingBitrate > 0 ? Math.min(availableOutgoingBitrate * 0.9, manualCap) : manualCap;
+  const warmupBitrateFloor = Math.min(manualCap, 10000000);
+  let poorPasses = previousState.poorPasses || 0;
+  let goodPasses = previousState.goodPasses || 0;
+  let targetBitrate = Math.max(warmupBitrateFloor, networkCap);
+  let targetFps = profile.maxFps;
   let scaleResolutionDownBy = 1;
 
-  if (packetsLostRatio > 0.08 || roundTripTime > 0.18) {
-    targetBitrate = Math.max(3_500_000, networkCap * 0.42);
-    targetFps = 24;
-    scaleResolutionDownBy = 2;
-  } else if (packetsLostRatio > 0.045 || roundTripTime > 0.12) {
-    targetBitrate = Math.max(5_000_000, networkCap * 0.58);
-    targetFps = 30;
-    scaleResolutionDownBy = 1.5;
-  } else if (packetsLostRatio > 0.02 || roundTripTime > 0.08) {
-    targetBitrate = Math.max(7_000_000, networkCap * 0.72);
-    targetFps = 45;
-    scaleResolutionDownBy = 1.25;
+  const severe = smoothedPacketsLostRatio > 0.08 || smoothedRoundTripTime > 0.2;
+  const moderate = smoothedPacketsLostRatio > 0.04 || smoothedRoundTripTime > 0.12;
+  const mild = smoothedPacketsLostRatio > 0.02 || smoothedRoundTripTime > 0.08;
+
+  if (severe || moderate) {
+    poorPasses += 1;
+    goodPasses = 0;
+  } else if (!mild) {
+    goodPasses += 1;
+    poorPasses = 0;
   } else {
-    targetBitrate = Math.max(8_000_000, networkCap * 0.9);
+    poorPasses = Math.max(poorPasses - 1, 0);
+    goodPasses = 0;
+  }
+
+  if (connectionAgeMs < 7000 && !severe) {
+    targetBitrate = clamp(networkCap, warmupBitrateFloor, manualCap);
+    targetFps = profile.maxFps;
+  } else if (severe && poorPasses >= 2) {
+    targetBitrate = Math.max(6_000_000, networkCap * 0.62);
+    targetFps = 30;
+    scaleResolutionDownBy = poorPasses >= 4 ? 1.5 : 1.25;
+  } else if (moderate && poorPasses >= 2) {
+    targetBitrate = Math.max(8_000_000, networkCap * 0.74);
+    targetFps = 45;
+    scaleResolutionDownBy = 1;
+  } else if (mild) {
+    targetBitrate = Math.max(10_000_000, networkCap * 0.85);
+    targetFps = 45;
+  } else {
+    targetBitrate = Math.max(11_000_000, networkCap * 0.94);
     targetFps = profile.maxFps;
     scaleResolutionDownBy = 1;
   }
 
+  if (goodPasses >= 3) {
+    scaleResolutionDownBy = 1;
+    targetFps = profile.maxFps;
+  }
+
+  targetBitrate = clamp(
+    smoothValue(previousState.targetBitrate, targetBitrate, 0.18, 0.32),
+    6_000_000,
+    manualCap
+  );
+  targetFps = Math.round(clamp(smoothValue(previousState.targetFps, targetFps, 0.25, 0.4), 30, profile.maxFps));
+  scaleResolutionDownBy = clamp(
+    smoothValue(previousState.scaleResolutionDownBy, scaleResolutionDownBy, 0.2, 0.45),
+    1,
+    1.5
+  );
+
   return {
+    connectedAt,
     targetBitrate: Math.round(Math.min(targetBitrate, profile.maxBitrate)),
     targetFps,
     scaleResolutionDownBy,
     roundTripTime,
-    packetsLostRatio
+    packetsLostRatio,
+    smoothedRoundTripTime,
+    smoothedPacketsLostRatio,
+    poorPasses,
+    goodPasses,
+    lastAppliedAt: Date.now()
   };
 }
 
