@@ -54,6 +54,7 @@ const hostClearViewerBtn = document.getElementById('hostClearViewer');
 const hostClearAllBtn = document.getElementById('hostClearAll');
 
 const DEFAULT_CODE_SERVICE_URL = 'https://live-screen-share-code-service.jaydenrmaine.workers.dev';
+const DRAWING_FEATURE_ENABLED = false;
 
 const storageKeys = {
   mode: 'lss.mode',
@@ -144,12 +145,14 @@ async function init() {
   stopBackendBtn.addEventListener('click', stopBackendFromApp);
   checkUpdatesBtn.addEventListener('click', manualCheckForUpdates);
   connectRoomBtn.addEventListener('click', connectViewerByRoomPassword);
-  viewerBrushColorEl.addEventListener('input', () => {
-    annotationBrushColor = viewerBrushColorEl.value || '#ff6b57';
-  });
-  viewerClearOwnBtn.addEventListener('click', clearOwnViewerAnnotations);
-  hostClearViewerBtn.addEventListener('click', clearSelectedViewerAnnotations);
-  hostClearAllBtn.addEventListener('click', clearAllAnnotationsFromHost);
+  if (DRAWING_FEATURE_ENABLED) {
+    viewerBrushColorEl.addEventListener('input', () => {
+      annotationBrushColor = viewerBrushColorEl.value || '#ff6b57';
+    });
+    viewerClearOwnBtn.addEventListener('click', clearOwnViewerAnnotations);
+    hostClearViewerBtn.addEventListener('click', clearSelectedViewerAnnotations);
+    hostClearAllBtn.addEventListener('click', clearAllAnnotationsFromHost);
+  }
 
   hostModalConfirmBtn.addEventListener('click', confirmHostStartFromModal);
   hostModalCancelBtn.addEventListener('click', closeHostStartModal);
@@ -184,18 +187,27 @@ async function init() {
 
   startHostBtn.addEventListener('click', startHostWithPrompt);
   stopHostBtn.addEventListener('click', () => stopHost(true));
-  document.addEventListener('keydown', onGlobalKeydown);
-  window.addEventListener('resize', resizeAnnotationCanvas);
-  videoEl.addEventListener('loadedmetadata', resizeAnnotationCanvas);
-  annotationCanvasEl.addEventListener('pointerdown', onAnnotationPointerDown);
-  annotationCanvasEl.addEventListener('pointermove', onAnnotationPointerMove);
-  annotationCanvasEl.addEventListener('pointerup', onAnnotationPointerUp);
-  annotationCanvasEl.addEventListener('pointercancel', onAnnotationPointerUp);
-  annotationCanvasEl.addEventListener('pointerleave', onAnnotationPointerUp);
+  if (DRAWING_FEATURE_ENABLED) {
+    document.addEventListener('keydown', onGlobalKeydown);
+    window.addEventListener('resize', resizeAnnotationCanvas);
+    videoEl.addEventListener('loadedmetadata', resizeAnnotationCanvas);
+    annotationCanvasEl.addEventListener('pointerdown', onAnnotationPointerDown);
+    annotationCanvasEl.addEventListener('pointermove', onAnnotationPointerMove);
+    annotationCanvasEl.addEventListener('pointerup', onAnnotationPointerUp);
+    annotationCanvasEl.addEventListener('pointercancel', onAnnotationPointerUp);
+    annotationCanvasEl.addEventListener('pointerleave', onAnnotationPointerUp);
+  }
 
   syncHostSourceUI();
-  updateAnnotationPermissionUI();
-  resizeAnnotationCanvas();
+  if (DRAWING_FEATURE_ENABLED) {
+    updateAnnotationPermissionUI();
+    resizeAnnotationCanvas();
+  } else {
+    annotationCanvasEl.classList.add('hidden');
+    annotationHintEl.classList.add('hidden');
+    viewerAnnotationPanelEl.classList.add('hidden');
+    hostAnnotationPanelEl.classList.add('hidden');
+  }
   setTimeout(() => {
     refreshDevices(false).catch((error) => setStatus('Refresh devices failed: ' + (error?.message || error)));
   }, 0);
@@ -234,8 +246,10 @@ function onModeChange() {
   persistInputs();
   syncModeUI();
   syncAdaptiveStreamingLoop();
-  clearAnnotationOverlay();
-  updateAnnotationPermissionUI();
+  if (DRAWING_FEATURE_ENABLED) {
+    clearAnnotationOverlay();
+    updateAnnotationPermissionUI();
+  }
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.close();
   }
@@ -245,8 +259,13 @@ function syncModeUI() {
   const isHost = mode === 'host';
   hostPanel.classList.toggle('hidden', !isHost);
   viewerPanel.classList.toggle('hidden', isHost);
-  hostAnnotationPanelEl.classList.toggle('hidden', !isHost);
-  viewerAnnotationPanelEl.classList.toggle('hidden', isHost);
+  if (DRAWING_FEATURE_ENABLED) {
+    hostAnnotationPanelEl.classList.toggle('hidden', !isHost);
+    viewerAnnotationPanelEl.classList.toggle('hidden', isHost);
+  } else {
+    hostAnnotationPanelEl.classList.add('hidden');
+    viewerAnnotationPanelEl.classList.add('hidden');
+  }
 
   modeEl.parentElement.classList.remove('hidden');
   codeServiceWrapEl.classList.toggle('hidden', !isHost);
@@ -258,10 +277,13 @@ function syncModeUI() {
   });
 
   videoEl.muted = isHost;
-  updateAnnotationViewerSelect();
+  if (DRAWING_FEATURE_ENABLED) {
+    updateAnnotationViewerSelect();
+  }
 }
 
 function onGlobalKeydown(event) {
+  if (!DRAWING_FEATURE_ENABLED) return;
   if (mode !== 'host') return;
   if (!event.ctrlKey || !event.shiftKey) return;
   if (event.repeat) return;
@@ -277,6 +299,7 @@ function onGlobalKeydown(event) {
 }
 
 function updateAnnotationPermissionUI() {
+  if (!DRAWING_FEATURE_ENABLED) return;
   if (!annotationCanvasEl || !annotationHintEl) return;
   const drawingAllowedOnThisClient = mode === 'viewer' && viewerDrawingEnabled;
   annotationCanvasEl.classList.toggle('draw-enabled', drawingAllowedOnThisClient);
@@ -298,6 +321,7 @@ function updateAnnotationPermissionUI() {
 }
 
 function updateAnnotationViewerSelect() {
+  if (!DRAWING_FEATURE_ENABLED) return;
   if (!annotationViewerSelectEl) return;
   const viewerIds = Array.from(hostPeers.keys());
   const previousValue = annotationViewerSelectEl.value;
@@ -455,6 +479,7 @@ function pushAndDrawAnnotationSegment(segment) {
 }
 
 function clearOwnViewerAnnotations() {
+  if (!DRAWING_FEATURE_ENABLED) return;
   if (mode !== 'viewer') return;
   sendDrawSignal({
     type: 'clear-owner',
@@ -463,6 +488,7 @@ function clearOwnViewerAnnotations() {
 }
 
 function clearSelectedViewerAnnotations() {
+  if (!DRAWING_FEATURE_ENABLED) return;
   if (mode !== 'host') return;
   const ownerId = annotationViewerSelectEl.value;
   if (!ownerId) return;
@@ -473,6 +499,7 @@ function clearSelectedViewerAnnotations() {
 }
 
 function clearAllAnnotationsFromHost() {
+  if (!DRAWING_FEATURE_ENABLED) return;
   if (mode !== 'host') return;
   applyAndBroadcastDrawPayload({
     type: 'clear'
@@ -654,6 +681,7 @@ function broadcastDrawingPermission() {
 }
 
 function handleHostDrawSignal(drawPayload) {
+  if (!DRAWING_FEATURE_ENABLED) return;
   if (!drawPayload || !drawPayload.type) return;
   if (drawPayload.type === 'permission') {
     viewerDrawingEnabled = Boolean(drawPayload.allowed);
@@ -681,6 +709,7 @@ function handleHostDrawSignal(drawPayload) {
 }
 
 function handleViewerDrawSignal(fromViewerId, drawPayload) {
+  if (!DRAWING_FEATURE_ENABLED) return;
   if (!drawPayload || !drawPayload.type) return;
   if (!hostAllowsViewerDrawing) return;
   const normalizedPayload = { ...drawPayload, ownerId: drawPayload.ownerId || fromViewerId };
