@@ -204,6 +204,46 @@
             </label>
             <button id="joinRoom" type="button">Connect</button>
           </div>
+
+          <section class="surface-panel annotation-control-panel" id="viewerAnnotationPanel">
+            <div class="panel-head">
+              <div>
+                <p class="section-kicker">Drawing</p>
+                <h3>Viewer brush</h3>
+              </div>
+            </div>
+            <div class="grid duo">
+              <label>
+                Brush color
+                <input id="viewerBrushColor" type="color" value="#ff6b57" />
+              </label>
+              <div class="annotation-action-block">
+                <span class="annotation-control-label">Your drawings</span>
+                <button id="viewerClearOwn" type="button" class="ghost">Clear my drawings</button>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section id="hostAnnotationPanel" class="workspace-card hidden">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">Drawing</p>
+              <h3>Host controls</h3>
+            </div>
+          </div>
+          <div class="grid duo">
+            <label>
+              Viewer drawings
+              <select id="annotationViewerSelect">
+                <option value="">No viewers connected</option>
+              </select>
+            </label>
+            <div class="annotation-action-stack">
+              <button id="hostClearViewer" type="button" class="ghost">Clear selected viewer</button>
+              <button id="hostClearAll" type="button" class="ghost danger">Clear all drawings</button>
+            </div>
+          </div>
         </section>
 
         <section class="workspace-card preview-shell">

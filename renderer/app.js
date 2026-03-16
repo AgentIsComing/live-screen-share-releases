@@ -45,6 +45,13 @@ const latencyProfileEl = document.getElementById('latencyProfile');
 const videoEl = document.getElementById('video');
 const annotationCanvasEl = document.getElementById('annotationCanvas');
 const annotationHintEl = document.getElementById('annotationHint');
+const viewerAnnotationPanelEl = document.getElementById('viewerAnnotationPanel');
+const viewerBrushColorEl = document.getElementById('viewerBrushColor');
+const viewerClearOwnBtn = document.getElementById('viewerClearOwn');
+const hostAnnotationPanelEl = document.getElementById('hostAnnotationPanel');
+const annotationViewerSelectEl = document.getElementById('annotationViewerSelect');
+const hostClearViewerBtn = document.getElementById('hostClearViewer');
+const hostClearAllBtn = document.getElementById('hostClearAll');
 
 const DEFAULT_CODE_SERVICE_URL = 'https://live-screen-share-code-service.jaydenrmaine.workers.dev';
 
@@ -92,6 +99,7 @@ let viewerDrawingEnabled = false;
 let annotationPointerActive = false;
 let annotationStrokeId = null;
 let annotationStrokeWidth = 3;
+let annotationBrushColor = '#ff6b57';
 let annotationContext = null;
 let annotationCanvasW = 0;
 let annotationCanvasH = 0;
@@ -136,6 +144,12 @@ async function init() {
   stopBackendBtn.addEventListener('click', stopBackendFromApp);
   checkUpdatesBtn.addEventListener('click', manualCheckForUpdates);
   connectRoomBtn.addEventListener('click', connectViewerByRoomPassword);
+  viewerBrushColorEl.addEventListener('input', () => {
+    annotationBrushColor = viewerBrushColorEl.value || '#ff6b57';
+  });
+  viewerClearOwnBtn.addEventListener('click', clearOwnViewerAnnotations);
+  hostClearViewerBtn.addEventListener('click', clearSelectedViewerAnnotations);
+  hostClearAllBtn.addEventListener('click', clearAllAnnotationsFromHost);
 
   hostModalConfirmBtn.addEventListener('click', confirmHostStartFromModal);
   hostModalCancelBtn.addEventListener('click', closeHostStartModal);
@@ -231,6 +245,8 @@ function syncModeUI() {
   const isHost = mode === 'host';
   hostPanel.classList.toggle('hidden', !isHost);
   viewerPanel.classList.toggle('hidden', isHost);
+  hostAnnotationPanelEl.classList.toggle('hidden', !isHost);
+  viewerAnnotationPanelEl.classList.toggle('hidden', isHost);
 
   modeEl.parentElement.classList.remove('hidden');
   codeServiceWrapEl.classList.toggle('hidden', !isHost);
@@ -242,6 +258,7 @@ function syncModeUI() {
   });
 
   videoEl.muted = isHost;
+  updateAnnotationViewerSelect();
 }
 
 function onGlobalKeydown(event) {
@@ -263,6 +280,10 @@ function updateAnnotationPermissionUI() {
   if (!annotationCanvasEl || !annotationHintEl) return;
   const drawingAllowedOnThisClient = mode === 'viewer' && viewerDrawingEnabled;
   annotationCanvasEl.classList.toggle('draw-enabled', drawingAllowedOnThisClient);
+  viewerBrushColorEl.disabled = mode !== 'viewer' || !viewerDrawingEnabled;
+  viewerClearOwnBtn.disabled = mode !== 'viewer';
+  hostClearViewerBtn.disabled = mode !== 'host' || !annotationViewerSelectEl.value;
+  hostClearAllBtn.disabled = mode !== 'host' || annotationSegments.length === 0;
 
   if (mode === 'host') {
     annotationHintEl.textContent = hostAllowsViewerDrawing
@@ -274,6 +295,30 @@ function updateAnnotationPermissionUI() {
   annotationHintEl.textContent = viewerDrawingEnabled
     ? 'Drawing enabled by host. Hold left-click and draw.'
     : 'Host has drawing locked.';
+}
+
+function updateAnnotationViewerSelect() {
+  if (!annotationViewerSelectEl) return;
+  const viewerIds = Array.from(hostPeers.keys());
+  const previousValue = annotationViewerSelectEl.value;
+  annotationViewerSelectEl.innerHTML = '';
+
+  if (viewerIds.length === 0) {
+    annotationViewerSelectEl.innerHTML = '<option value="">No viewers connected</option>';
+    annotationViewerSelectEl.value = '';
+    updateAnnotationPermissionUI();
+    return;
+  }
+
+  for (const viewerId of viewerIds) {
+    const option = document.createElement('option');
+    option.value = viewerId;
+    option.textContent = viewerId;
+    annotationViewerSelectEl.appendChild(option);
+  }
+
+  annotationViewerSelectEl.value = viewerIds.includes(previousValue) ? previousValue : viewerIds[0];
+  updateAnnotationPermissionUI();
 }
 
 function resizeAnnotationCanvas() {
@@ -300,15 +345,27 @@ function resizeAnnotationCanvas() {
   redrawAllAnnotationSegments();
 }
 
-function clearAnnotationOverlay() {
-  annotationStrokeState.clear();
-  annotationSegments.length = 0;
+function clearAnnotationOverlay(ownerId = null) {
+  if (!ownerId) {
+    annotationStrokeState.clear();
+    annotationSegments.length = 0;
+  } else {
+    for (const [strokeId, state] of annotationStrokeState.entries()) {
+      if (state.ownerId === ownerId) {
+        annotationStrokeState.delete(strokeId);
+      }
+    }
+    for (let i = annotationSegments.length - 1; i >= 0; i -= 1) {
+      if (annotationSegments[i].ownerId === ownerId) {
+        annotationSegments.splice(i, 1);
+      }
+    }
+  }
   if (!annotationContext) {
     resizeAnnotationCanvas();
   }
-  if (annotationContext) {
-    annotationContext.clearRect(0, 0, annotationCanvasEl.clientWidth, annotationCanvasEl.clientHeight);
-  }
+  redrawAllAnnotationSegments();
+  updateAnnotationPermissionUI();
 }
 
 function getVideoContentRect() {
@@ -397,6 +454,55 @@ function pushAndDrawAnnotationSegment(segment) {
   drawAnnotationSegmentRaw(segment.from, segment.to, segment.color, segment.width);
 }
 
+function clearOwnViewerAnnotations() {
+  if (mode !== 'viewer') return;
+  sendDrawSignal({
+    type: 'clear-owner',
+    ownerId: clientId
+  });
+}
+
+function clearSelectedViewerAnnotations() {
+  if (mode !== 'host') return;
+  const ownerId = annotationViewerSelectEl.value;
+  if (!ownerId) return;
+  applyAndBroadcastDrawPayload({
+    type: 'clear-owner',
+    ownerId
+  });
+}
+
+function clearAllAnnotationsFromHost() {
+  if (mode !== 'host') return;
+  applyAndBroadcastDrawPayload({
+    type: 'clear'
+  });
+}
+
+function applyAndBroadcastDrawPayload(drawPayload) {
+  if (!drawPayload) return;
+  if (drawPayload.type === 'clear') {
+    clearAnnotationOverlay();
+  } else if (drawPayload.type === 'clear-owner' && drawPayload.ownerId) {
+    clearAnnotationOverlay(drawPayload.ownerId);
+  } else if (drawPayload.type.startsWith('stroke-')) {
+    handleDrawEvent(drawPayload);
+  }
+
+  for (const viewerId of hostPeers.keys()) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) break;
+    ws.send(JSON.stringify({
+      type: 'signal',
+      data: {
+        from: clientId,
+        to: viewerId,
+        draw: drawPayload
+      }
+    }));
+  }
+  updateAnnotationPermissionUI();
+}
+
 function redrawAllAnnotationSegments() {
   if (!annotationContext) return;
   annotationContext.clearRect(0, 0, annotationCanvasEl.clientWidth, annotationCanvasEl.clientHeight);
@@ -430,8 +536,9 @@ function onAnnotationPointerDown(event) {
   sendDrawSignal({
     type: 'stroke-start',
     strokeId: annotationStrokeId,
+    ownerId: clientId,
     point,
-    color: '#ff6b57',
+    color: annotationBrushColor,
     width: annotationStrokeWidth
   });
 }
@@ -444,8 +551,9 @@ function onAnnotationPointerMove(event) {
   sendDrawSignal({
     type: 'stroke-move',
     strokeId: annotationStrokeId,
+    ownerId: clientId,
     point,
-    color: '#ff6b57',
+    color: annotationBrushColor,
     width: annotationStrokeWidth
   });
 }
@@ -456,8 +564,9 @@ function onAnnotationPointerUp(event) {
   sendDrawSignal({
     type: 'stroke-end',
     strokeId: annotationStrokeId,
+    ownerId: clientId,
     point,
-    color: '#ff6b57',
+    color: annotationBrushColor,
     width: annotationStrokeWidth
   });
 
@@ -471,6 +580,7 @@ function onAnnotationPointerUp(event) {
 function handleDrawEvent(drawEvent) {
   if (!drawEvent || !drawEvent.strokeId || !drawEvent.type) return;
   const strokeId = drawEvent.strokeId;
+  const ownerId = drawEvent.ownerId || 'unknown';
   const color = drawEvent.color || '#ff6b57';
   const width = Number(drawEvent.width) || annotationStrokeWidth;
 
@@ -478,9 +588,11 @@ function handleDrawEvent(drawEvent) {
     if (!drawEvent.point) return;
     annotationStrokeState.set(strokeId, {
       point: drawEvent.point,
+      ownerId,
       color,
       width
     });
+    updateAnnotationPermissionUI();
     return;
   }
 
@@ -497,12 +609,14 @@ function handleDrawEvent(drawEvent) {
     const segment = {
       from: state.point,
       to: nextPoint,
+      ownerId: state.ownerId,
       color,
       width
     };
     pushAndDrawAnnotationSegment(segment);
     annotationStrokeState.set(strokeId, {
       point: nextPoint,
+      ownerId: state.ownerId,
       color,
       width
     });
@@ -510,6 +624,7 @@ function handleDrawEvent(drawEvent) {
     if (drawEvent.type === 'stroke-end') {
       annotationStrokeState.delete(strokeId);
     }
+    updateAnnotationPermissionUI();
   }
 }
 
@@ -534,19 +649,7 @@ function broadcastDrawingPermission() {
     sendDrawPermissionToViewer(viewerId);
   }
   if (!hostAllowsViewerDrawing) {
-    clearAnnotationOverlay();
-    for (const viewerId of hostPeers.keys()) {
-      ws.send(JSON.stringify({
-        type: 'signal',
-        data: {
-          from: clientId,
-          to: viewerId,
-          draw: {
-            type: 'clear'
-          }
-        }
-      }));
-    }
+    applyAndBroadcastDrawPayload({ type: 'clear' });
   }
 }
 
@@ -567,6 +670,11 @@ function handleHostDrawSignal(drawPayload) {
     return;
   }
 
+  if (drawPayload.type === 'clear-owner' && drawPayload.ownerId) {
+    clearAnnotationOverlay(drawPayload.ownerId);
+    return;
+  }
+
   if (drawPayload.type.startsWith('stroke-')) {
     handleDrawEvent(drawPayload);
   }
@@ -575,25 +683,11 @@ function handleHostDrawSignal(drawPayload) {
 function handleViewerDrawSignal(fromViewerId, drawPayload) {
   if (!drawPayload || !drawPayload.type) return;
   if (!hostAllowsViewerDrawing) return;
-  if (drawPayload.type === 'clear') {
-    clearAnnotationOverlay();
+  const normalizedPayload = { ...drawPayload, ownerId: drawPayload.ownerId || fromViewerId };
+  if (normalizedPayload.type === 'clear-owner') {
+    normalizedPayload.ownerId = fromViewerId;
   }
-
-  if (drawPayload.type.startsWith('stroke-')) {
-    handleDrawEvent(drawPayload);
-  }
-
-  for (const viewerId of hostPeers.keys()) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) break;
-    ws.send(JSON.stringify({
-      type: 'signal',
-      data: {
-        from: clientId,
-        to: viewerId,
-        draw: drawPayload
-      }
-    }));
-  }
+  applyAndBroadcastDrawPayload(normalizedPayload);
 }
 
 function syncHostSourceUI() {
@@ -1253,6 +1347,8 @@ function closeHostPeer(viewerId) {
   hostPeers.delete(viewerId);
   hostPendingIceCandidates.delete(viewerId);
   adaptivePeerState.delete(viewerId);
+  clearAnnotationOverlay(viewerId);
+  updateAnnotationViewerSelect();
   updateHostStats();
   syncAdaptiveStreamingLoop();
 }
@@ -1268,6 +1364,7 @@ function closeAllHostPeers() {
   }
   hostPendingIceCandidates.clear();
   adaptivePeerState.clear();
+  updateAnnotationViewerSelect();
   updateHostStats();
   syncAdaptiveStreamingLoop();
 }
@@ -1552,6 +1649,8 @@ function stopViewer() {
   resetViewerPeer();
   videoEl.srcObject = null;
   viewerDrawingEnabled = false;
+  annotationPointerActive = false;
+  annotationStrokeId = null;
   updateAnnotationPermissionUI();
   clearAnnotationOverlay();
   viewerFormEl.classList.remove('hidden');
@@ -1565,6 +1664,7 @@ function createHostPeer(viewerId) {
   adaptivePeerState.set(viewerId, createInitialAdaptiveState());
   syncPeerTracks(peer, localStream);
   sendDrawPermissionToViewer(viewerId);
+  updateAnnotationViewerSelect();
   updateHostStats();
   syncAdaptiveStreamingLoop();
   return peer;
@@ -1649,13 +1749,12 @@ window.addEventListener('beforeunload', () => {
 });
 
 async function manualCheckForUpdates() {
+  setUpdateStatus('Checking for updates...');
   const result = await window.desktopApp.checkForUpdates();
   if (!result.ok) {
     setUpdateStatus('Update check failed: ' + result.error);
     return;
   }
-
-  setUpdateStatus('Checking for updates...');
 }
 
 function getLatencyProfile() {

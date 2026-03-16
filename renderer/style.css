@@ -445,6 +445,28 @@ textarea:focus {
   gap: 16px;
 }
 
+.annotation-control-panel {
+  margin-top: 4px;
+}
+
+.annotation-action-block,
+.annotation-action-stack {
+  display: grid;
+  gap: 10px;
+  align-content: end;
+}
+
+.annotation-control-label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+input[type="color"] {
+  min-height: 52px;
+  padding: 8px;
+  cursor: pointer;
+}
+
 .video-frame {
   position: relative;
   min-height: 420px;

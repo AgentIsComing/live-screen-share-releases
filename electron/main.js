@@ -42,6 +42,7 @@ let signalProc = null;
 let tunnelProc = null;
 let updateDownloaded = false;
 let installOnNextDownload = false;
+let manualUpdateCheckActive = false;
 let pendingUpdaterServiceTask = null;
 
 if (app?.commandLine?.appendSwitch) {
@@ -264,7 +265,11 @@ function setupAutoUpdater() {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
-  autoUpdater.on('checking-for-update', () => sendUpdaterStatus('Checking for updates...'));
+  autoUpdater.on('checking-for-update', () => {
+    if (manualUpdateCheckActive) {
+      sendUpdaterStatus('Checking for updates...');
+    }
+  });
   autoUpdater.on('update-available', () => {
     updateDownloaded = false;
     if (installOnNextDownload) {
@@ -276,12 +281,16 @@ function setupAutoUpdater() {
   autoUpdater.on('update-not-available', () => {
     updateDownloaded = false;
     installOnNextDownload = false;
-    sendUpdaterStatus('App is up to date.');
+    if (manualUpdateCheckActive) {
+      sendUpdaterStatus('App is up to date.');
+    }
+    manualUpdateCheckActive = false;
   });
   autoUpdater.on('update-downloaded', () => {
     updateDownloaded = true;
     if (installOnNextDownload) {
       installOnNextDownload = false;
+      manualUpdateCheckActive = false;
       sendUpdaterStatus('Update downloaded. Closing app to install and relaunch...');
       setTimeout(() => {
         try {
@@ -292,21 +301,23 @@ function setupAutoUpdater() {
       }, 500);
       return;
     }
+    manualUpdateCheckActive = false;
     sendUpdaterStatus('Update downloaded. Click Check app updates to install now.');
   });
   autoUpdater.on('error', (err) => {
     installOnNextDownload = false;
+    manualUpdateCheckActive = false;
     sendUpdaterStatus(`Update error: ${err.message}`);
   });
 
   setTimeout(() => {
-    autoUpdater.checkForUpdatesAndNotify().catch(() => {
+    autoUpdater.checkForUpdates().catch(() => {
       // ignore
     });
   }, 3000);
 
   setInterval(() => {
-    autoUpdater.checkForUpdatesAndNotify().catch(() => {
+    autoUpdater.checkForUpdates().catch(() => {
       // ignore
     });
   }, 30 * 60 * 1000);
@@ -544,6 +555,7 @@ ipcMain.handle('check-for-updates', async () => {
 
     if (updateDownloaded) {
       installOnNextDownload = false;
+      manualUpdateCheckActive = false;
       sendUpdaterStatus('Installing update now...');
       setTimeout(() => {
         try {
@@ -556,10 +568,12 @@ ipcMain.handle('check-for-updates', async () => {
     }
 
     installOnNextDownload = true;
+    manualUpdateCheckActive = true;
     await autoUpdater.checkForUpdates();
     return { ok: true, installing: false };
   } catch (error) {
     installOnNextDownload = false;
+    manualUpdateCheckActive = false;
     return { ok: false, error: error.message };
   }
 });
