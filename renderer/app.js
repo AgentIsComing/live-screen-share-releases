@@ -92,6 +92,7 @@ let viewerPendingIceCandidates = [];
 const hostPeers = new Map();
 const hostPendingIceCandidates = new Map();
 const adaptivePeerState = new Map();
+const hostPeerDisconnectTimers = new Map();
 
 init();
 
@@ -736,7 +737,13 @@ function makePeerConnection(role, targetViewerId = null) {
       return;
     }
 
-    if (state === 'failed' || state === 'closed' || state === 'disconnected') {
+    if (state === 'connected') {
+      clearHostPeerDisconnectTimer(targetViewerId);
+    }
+    if (state === 'disconnected') {
+      scheduleHostPeerDisconnectClose(targetViewerId, peer);
+    }
+    if (state === 'failed' || state === 'closed') {
       closeHostPeer(targetViewerId);
     }
     updateHostStats();
@@ -746,7 +753,9 @@ function makePeerConnection(role, targetViewerId = null) {
     peer.ontrack = (event) => {
       const [stream] = event.streams;
       if (!stream) return;
-      videoEl.srcObject = stream;
+      if (videoEl.srcObject !== stream) {
+        videoEl.srcObject = stream;
+      }
       videoEl.muted = false;
       videoEl.play().catch(() => setStatus('Press play to start video/audio.'));
     };
@@ -757,10 +766,18 @@ function makePeerConnection(role, targetViewerId = null) {
 
 function applyVideoSenderSettings(peer) {
   const profile = getLatencyProfile();
-  const adaptive = adaptivePeerState.get(getPeerIdForConnection(peer)) || {};
+  const viewerId = getPeerIdForConnection(peer);
+  const adaptive = adaptivePeerState.get(viewerId) || {};
+  const connectedPeers = Array.from(hostPeers.values()).filter((hostPeer) => hostPeer.connectionState === 'connected');
+  const activeViewerCount = Math.max(connectedPeers.length, 1);
+  const manualCap = Math.min(Number(bitrateEl.value), profile.maxBitrate);
+  const perViewerBudget = activeViewerCount > 1
+    ? Math.max(4_500_000, Math.round((manualCap * 0.92) / activeViewerCount))
+    : manualCap;
   const maxBitrate = Math.min(
-    adaptive.targetBitrate || Number(bitrateEl.value),
-    profile.maxBitrate
+    adaptive.targetBitrate || manualCap,
+    profile.maxBitrate,
+    perViewerBudget
   );
   const maxFramerate = adaptive.targetFps || profile.maxFps;
   const scaleResolutionDownBy = adaptive.scaleResolutionDownBy || 1;
@@ -825,8 +842,29 @@ function getPeerIdForConnection(peer) {
   return null;
 }
 
+function clearHostPeerDisconnectTimer(viewerId) {
+  if (!viewerId) return;
+  const timer = hostPeerDisconnectTimers.get(viewerId);
+  if (!timer) return;
+  clearTimeout(timer);
+  hostPeerDisconnectTimers.delete(viewerId);
+}
+
+function scheduleHostPeerDisconnectClose(viewerId, peer) {
+  if (!viewerId || !peer || hostPeerDisconnectTimers.has(viewerId)) return;
+  const timer = setTimeout(() => {
+    hostPeerDisconnectTimers.delete(viewerId);
+    const currentPeer = hostPeers.get(viewerId);
+    if (currentPeer !== peer) return;
+    if (peer.connectionState === 'connected') return;
+    closeHostPeer(viewerId);
+  }, 8500);
+  hostPeerDisconnectTimers.set(viewerId, timer);
+}
+
 function closeHostPeer(viewerId) {
   if (!viewerId) return;
+  clearHostPeerDisconnectTimer(viewerId);
   const peer = hostPeers.get(viewerId);
   if (peer) {
     try { peer.close(); } catch {}
@@ -839,6 +877,10 @@ function closeHostPeer(viewerId) {
 }
 
 function closeAllHostPeers() {
+  for (const timer of hostPeerDisconnectTimers.values()) {
+    clearTimeout(timer);
+  }
+  hostPeerDisconnectTimers.clear();
   for (const [viewerId, peer] of hostPeers.entries()) {
     try { peer.close(); } catch {}
     hostPeers.delete(viewerId);
