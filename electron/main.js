@@ -41,6 +41,7 @@ const backendState = {
 let signalProc = null;
 let tunnelProc = null;
 let updateDownloaded = false;
+let installOnNextDownload = false;
 let pendingUpdaterServiceTask = null;
 
 if (app?.commandLine?.appendSwitch) {
@@ -266,17 +267,37 @@ function setupAutoUpdater() {
   autoUpdater.on('checking-for-update', () => sendUpdaterStatus('Checking for updates...'));
   autoUpdater.on('update-available', () => {
     updateDownloaded = false;
+    if (installOnNextDownload) {
+      sendUpdaterStatus('Update found. Downloading, app will restart after install...');
+      return;
+    }
     sendUpdaterStatus('Update available. Downloading in background...');
   });
   autoUpdater.on('update-not-available', () => {
     updateDownloaded = false;
+    installOnNextDownload = false;
     sendUpdaterStatus('App is up to date.');
   });
   autoUpdater.on('update-downloaded', () => {
     updateDownloaded = true;
+    if (installOnNextDownload) {
+      installOnNextDownload = false;
+      sendUpdaterStatus('Update downloaded. Closing app to install and relaunch...');
+      setTimeout(() => {
+        try {
+          autoUpdater.quitAndInstall(true, true);
+        } catch (error) {
+          sendUpdaterStatus(`Install failed: ${error.message}`);
+        }
+      }, 500);
+      return;
+    }
     sendUpdaterStatus('Update downloaded. Click Check app updates to install now.');
   });
-  autoUpdater.on('error', (err) => sendUpdaterStatus(`Update error: ${err.message}`));
+  autoUpdater.on('error', (err) => {
+    installOnNextDownload = false;
+    sendUpdaterStatus(`Update error: ${err.message}`);
+  });
 
   setTimeout(() => {
     autoUpdater.checkForUpdatesAndNotify().catch(() => {
@@ -522,6 +543,7 @@ ipcMain.handle('check-for-updates', async () => {
     }
 
     if (updateDownloaded) {
+      installOnNextDownload = false;
       sendUpdaterStatus('Installing update now...');
       setTimeout(() => {
         try {
@@ -533,9 +555,11 @@ ipcMain.handle('check-for-updates', async () => {
       return { ok: true, installing: true, source: 'app' };
     }
 
+    installOnNextDownload = true;
     await autoUpdater.checkForUpdates();
     return { ok: true, installing: false };
   } catch (error) {
+    installOnNextDownload = false;
     return { ok: false, error: error.message };
   }
 });
