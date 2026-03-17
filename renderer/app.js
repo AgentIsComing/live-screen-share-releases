@@ -909,7 +909,11 @@ function connectSignaling() {
       hostAvailable = Boolean(message.hostAvailable);
       if (mode === 'viewer') {
         if (hostAvailable) {
-          await startViewer();
+          if (!isViewerPlaybackActive()) {
+            await startViewer();
+          } else {
+            setStatus('Viewer connected. Stream is live.');
+          }
         } else {
           pendingOffer = true;
           setStatus('Waiting for host...');
@@ -924,7 +928,9 @@ function connectSignaling() {
       hostAvailable = true;
       if (pendingOffer) {
         pendingOffer = false;
-        await startViewer();
+        if (!isViewerPlaybackActive()) {
+          await startViewer();
+        }
       }
       return;
     }
@@ -951,9 +957,13 @@ function connectSignaling() {
     if (mode === 'host') {
       setStatus(`Signaling disconnected (code ${event.code}). Reconnecting...`);
     } else {
-      stopViewer();
-      viewerFormEl.classList.remove('hidden');
-      setStatus(`Disconnected from host (code ${event.code}). Reconnecting...`);
+      if (isViewerPlaybackActive()) {
+        setStatus(`Signaling reconnecting (code ${event.code}). Stream continuing...`);
+      } else {
+        stopViewer();
+        viewerFormEl.classList.remove('hidden');
+        setStatus(`Disconnected from host (code ${event.code}). Reconnecting...`);
+      }
     }
     if (reconnectTimer) return;
     reconnectTimer = setTimeout(() => {
@@ -972,6 +982,14 @@ function reconnectSignaling() {
   joined = false;
   hostAvailable = false;
   connectSignaling();
+}
+
+function isViewerPlaybackActive() {
+  return Boolean(
+    viewerPc
+    && (viewerPc.connectionState === 'connected' || viewerPc.connectionState === 'connecting')
+    && videoEl.srcObject
+  );
 }
 
 async function waitForSignalingJoin(timeoutMs = 10000) {
@@ -1303,7 +1321,7 @@ function applyVideoSenderSettings(peer) {
     const bitrateDelta = Math.abs((currentEncoding.maxBitrate || 0) - maxBitrate);
     const fpsDelta = Math.abs((currentEncoding.maxFramerate || 0) - maxFramerate);
     const scaleDelta = Math.abs((currentEncoding.scaleResolutionDownBy || 1) - scaleResolutionDownBy);
-    const degradationPreference = latencyProfileEl.value === 'auto' ? 'balanced' : 'maintain-resolution';
+    const degradationPreference = latencyProfileEl.value === 'auto' ? 'maintain-framerate' : 'maintain-resolution';
     if (
       bitrateDelta < 350000
       && fpsDelta < 6
@@ -1650,6 +1668,11 @@ function stopHost(sendSignal) {
 async function startViewer() {
   if (!joined) return;
 
+  if (isViewerPlaybackActive()) {
+    viewerFormEl.classList.add('hidden');
+    return;
+  }
+
   if (!hostAvailable) {
     pendingOffer = true;
     return;
@@ -1802,13 +1825,14 @@ function getLatencyProfile() {
 
 function tuneReceiversForLatency(peer) {
   const profile = getLatencyProfile();
+  const jitterTarget = profile.playoutDelay <= 0.01 ? 0.012 : 0.026;
   for (const receiver of peer.getReceivers()) {
     if (receiver.track?.kind === 'video') {
       try {
         receiver.playoutDelayHint = profile.playoutDelay;
       } catch {}
       try {
-        receiver.jitterBufferTarget = 0;
+        receiver.jitterBufferTarget = jitterTarget;
       } catch {}
     }
   }
