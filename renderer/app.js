@@ -867,16 +867,25 @@ function normalizeSignalUrl(value) {
   const trimmed = (value || '').trim();
   if (!trimmed) return '';
 
-  if (/^https:\/\//i.test(trimmed)) {
-    return trimmed.replace(/^https:/i, 'wss:').replace(/\/+$/, '') + '/signal';
+  let candidate = trimmed;
+  if (/^https:\/\//i.test(candidate)) {
+    candidate = candidate.replace(/^https:/i, 'wss:');
+  } else if (/^http:\/\//i.test(candidate)) {
+    candidate = candidate.replace(/^http:/i, 'ws:');
   }
 
-  if (/^wss:\/\//i.test(trimmed) || /^ws:\/\//i.test(trimmed)) {
-    if (trimmed.endsWith('/signal')) return trimmed;
-    return trimmed.replace(/\/+$/, '') + '/signal';
+  try {
+    const url = new URL(candidate);
+    const path = url.pathname.replace(/^\/+|\/+$/g, '');
+    if (!path) {
+      url.pathname = '/signal';
+    } else if (path !== 'signal') {
+      url.pathname = `/${path}/signal`;
+    }
+    return url.toString();
+  } catch {
+    return candidate;
   }
-
-  return trimmed;
 }
 
 function rtcConfig() {
