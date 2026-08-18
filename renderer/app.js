@@ -53,7 +53,7 @@ const annotationViewerSelectEl = document.getElementById('annotationViewerSelect
 const hostClearViewerBtn = document.getElementById('hostClearViewer');
 const hostClearAllBtn = document.getElementById('hostClearAll');
 
-const DEFAULT_CODE_SERVICE_URL = 'https://live-screen-share-code-service.jaydenrmaine.workers.dev';
+const DEFAULT_CODE_SERVICE_URL = 'https://blinkcast-signaling.jaydenrmaine.workers.dev';
 const DRAWING_FEATURE_ENABLED = false;
 
 const storageKeys = {
@@ -122,6 +122,11 @@ async function init() {
   versionEl.textContent = `App v${await window.desktopApp.getVersion()}`;
 
   modeEl.value = localStorage.getItem(storageKeys.mode) || 'host';
+  const savedCodeServiceUrl = localStorage.getItem(storageKeys.codeServiceUrl);
+  const oldCodeServiceUrl = 'https://live-screen-share-code-service.jaydenrmaine.workers.dev';
+  if (savedCodeServiceUrl === oldCodeServiceUrl) {
+    localStorage.setItem(storageKeys.codeServiceUrl, DEFAULT_CODE_SERVICE_URL);
+  }
   codeServiceUrlEl.value = localStorage.getItem(storageKeys.codeServiceUrl) || DEFAULT_CODE_SERVICE_URL;
   bitrateEl.value = localStorage.getItem(storageKeys.bitrate) || '16000000';
   latencyProfileEl.value = localStorage.getItem(storageKeys.latencyProfile) || 'auto';
