@@ -2,6 +2,8 @@ const modeEl = document.getElementById('mode');
 const modeButtons = Array.from(document.querySelectorAll('.mode-chip'));
 const roomIdInputEl = document.getElementById('roomIdInput');
 const roomPasswordEl = document.getElementById('roomPassword');
+const joinCodeInputEl = document.getElementById('joinCodeInput');
+const joinCodeBtn = document.getElementById('joinCode');
 const connectRoomBtn = document.getElementById('joinRoom');
 const viewerFormEl = document.getElementById('viewerForm');
 
@@ -150,6 +152,7 @@ async function init() {
   stopBackendBtn.addEventListener('click', stopBackendFromApp);
   checkUpdatesBtn.addEventListener('click', manualCheckForUpdates);
   connectRoomBtn.addEventListener('click', connectViewerByRoomPassword);
+  joinCodeBtn.addEventListener('click', connectViewerByJoinCode);
   if (DRAWING_FEATURE_ENABLED) {
     viewerBrushColorEl.addEventListener('input', () => {
       annotationBrushColor = viewerBrushColorEl.value || '#ff6b57';
@@ -1149,6 +1152,37 @@ async function connectViewerByRoomPassword() {
   } else {
     pendingOffer = true;
     setStatus('Waiting for host...');
+  }
+}
+
+async function connectViewerByJoinCode() {
+  if (mode !== 'viewer') {
+    setStatus('Switch mode to viewer first.');
+    return;
+  }
+
+  const code = joinCodeInputEl.value.replace(/\D/g, '').slice(0, 5);
+  joinCodeInputEl.value = code;
+  if (code.length !== 5) {
+    setStatus('Enter a valid 5-digit code.');
+    return;
+  }
+
+  const result = await window.desktopApp.resolveJoinCode({
+    baseUrl: DEFAULT_CODE_SERVICE_URL,
+    code
+  });
+  if (!result.ok) {
+    setStatus('Code join failed: ' + result.error);
+    return;
+  }
+
+  roomId = result.roomId;
+  signalUrl = normalizeSignalUrl(result.wsUrl);
+  reconnectSignaling();
+  const ready = await waitForSignalingJoin();
+  if (!ready) {
+    setStatus('Could not join signaling.');
   }
 }
 

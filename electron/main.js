@@ -506,6 +506,17 @@ ipcMain.handle('resolve-room-access', async (_event, payload = {}) => {
   }
 });
 
+ipcMain.handle('resolve-join-code', async (_event, payload = {}) => {
+  try {
+    const code = String(payload.code || '').trim();
+    if (!/^\d{5}$/.test(code)) throw new Error('Enter a valid 5-digit code.');
+    const result = await callCodeService(payload.baseUrl, '/resolve', { code });
+    return { ok: true, roomId: result.roomId, wsUrl: result.wsUrl };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
+
 ipcMain.handle('start-backend', async () => {
   try {
     backendState.lastError = null;
