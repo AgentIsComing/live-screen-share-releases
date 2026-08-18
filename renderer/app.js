@@ -1297,8 +1297,11 @@ function makePeerConnection(role, targetViewerId = null) {
         viewerFormEl.classList.add('hidden');
         tuneReceiversForLatency(peer);
       }
-      if (state === 'failed' || state === 'disconnected') {
-        setStatus('Viewer connection dropped. Reconnect.');
+      if (state === 'failed') {
+        setStatus('Viewer connection failed. Check ICE/TURN connectivity.');
+        stopViewer();
+      } else if (state === 'disconnected') {
+        setStatus('Viewer connection interrupted. Reconnecting...');
       }
       return;
     }
@@ -1313,6 +1316,14 @@ function makePeerConnection(role, targetViewerId = null) {
       closeHostPeer(targetViewerId);
     }
     updateHostStats();
+  };
+
+  peer.oniceconnectionstatechange = () => {
+    setStatus(`WebRTC ICE: ${peer.iceConnectionState}`);
+  };
+
+  peer.onicecandidateerror = (event) => {
+    console.warn('WebRTC ICE candidate error', event.errorCode, event.errorText);
   };
 
   if (role === 'viewer') {
