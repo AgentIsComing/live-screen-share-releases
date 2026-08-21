@@ -33,7 +33,7 @@ function normalizeWsUrl(value) {
 }
 
 function normalizeRoomId(value) {
-  const roomId = String(value || '').trim();
+  const roomId = String(value || '').trim().toLowerCase();
   if (!roomId) {
     throw new Error('roomId is required');
   }

@@ -68,7 +68,7 @@ wss.on('connection', (ws) => {
     }
 
     if (message.type === 'join') {
-      const roomId = String(message.roomId || '').trim();
+      const roomId = String(message.roomId || '').trim().toLowerCase();
       const role = message.role;
       const clientId = String(message.clientId || '').trim();
 

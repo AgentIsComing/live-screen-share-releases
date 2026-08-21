@@ -975,7 +975,7 @@ function connectSignaling() {
       setStatus(`Signaling disconnected (code ${event.code}). Reconnecting...`);
     } else {
       if (isViewerPlaybackActive()) {
-        setStatus(`Signaling reconnecting (code ${event.code}). Stream continuing...`);
+        setStatus('Stream live.');
       } else {
         stopViewer();
         viewerFormEl.classList.remove('hidden');
@@ -1042,7 +1042,7 @@ async function startHostWithPrompt() {
 }
 
 async function confirmHostStartFromModal() {
-  const promptedRoomId = hostModalRoomIdEl.value.trim();
+  const promptedRoomId = hostModalRoomIdEl.value.trim().toLowerCase();
   const promptedPassword = hostModalPasswordEl.value;
 
   if (!promptedRoomId) {
@@ -1122,7 +1122,7 @@ async function connectViewerByRoomPassword() {
     return;
   }
 
-  const viewerRoomId = roomIdInputEl.value.trim();
+  const viewerRoomId = roomIdInputEl.value.trim().toLowerCase();
   const password = roomPasswordEl.value;
   if (!viewerRoomId) {
     setStatus('Enter Room ID.');
@@ -1328,13 +1328,18 @@ function makePeerConnection(role, targetViewerId = null) {
 
   if (role === 'viewer') {
     peer.ontrack = (event) => {
-      const [stream] = event.streams;
-      if (!stream) return;
+      console.info('[BlinkCast] viewer remote track received', event.track.kind, event.track.id, event.streams.length);
+      const stream = event.streams[0] || new MediaStream([event.track]);
       if (videoEl.srcObject !== stream) {
         videoEl.srcObject = stream;
       }
-      videoEl.muted = false;
-      videoEl.play().catch(() => setStatus('Press play to start video/audio.'));
+      videoEl.muted = true;
+      videoEl.play()
+        .then(() => setStatus('Stream live.'))
+        .catch((error) => {
+          console.warn('[BlinkCast] viewer video autoplay failed', error);
+          setStatus('Stream ready. Press play to view.');
+        });
     };
   }
 
