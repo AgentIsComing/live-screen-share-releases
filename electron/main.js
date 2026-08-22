@@ -501,7 +501,7 @@ ipcMain.handle('resolve-room-access', async (_event, payload = {}) => {
       roomId: normalizeRoomId(payload.roomId),
       password: normalizePassword(payload.password)
     });
-    return { ok: true, roomId: result.roomId, wsUrl: result.wsUrl };
+    return { ok: true, roomId: result.roomId, wsUrl: result.wsUrl, sessionToken: result.sessionToken || null };
   } catch (error) {
     return { ok: false, error: error.message };
   }
@@ -512,7 +512,7 @@ ipcMain.handle('resolve-join-code', async (_event, payload = {}) => {
     const code = String(payload.code || '').trim();
     if (!/^\d{5}$/.test(code)) throw new Error('Enter a valid 5-digit code.');
     const result = await callCodeService(payload.baseUrl, '/resolve', { code });
-    return { ok: true, roomId: result.roomId, wsUrl: result.wsUrl };
+    return { ok: true, roomId: result.roomId, wsUrl: result.wsUrl, sessionToken: result.sessionToken || null, code };
   } catch (error) {
     return { ok: false, error: error.message };
   }
