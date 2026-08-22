@@ -78,6 +78,7 @@ const backendIceServers = [
     credential: 'openrelayproject'
   }
 ];
+let turnRefreshTimer = null;
 
 let mode = 'host';
 let signalUrl = '';
@@ -111,6 +112,9 @@ let annotationCanvasH = 0;
 let localStream = null;
 let viewerPc = null;
 let viewerPendingIceCandidates = [];
+let viewerLatencyTimer = null;
+let viewerRenderDelayMs = null;
+let viewerRoundTripTimeMs = null;
 const hostPeers = new Map();
 const hostPendingIceCandidates = new Map();
 const adaptivePeerState = new Map();
@@ -196,6 +200,7 @@ async function init() {
 
   startHostBtn.addEventListener('click', startHostWithPrompt);
   stopHostBtn.addEventListener('click', () => stopHost(true));
+  startTURNRefresh();
   if (DRAWING_FEATURE_ENABLED) {
     document.addEventListener('keydown', onGlobalKeydown);
     window.addEventListener('resize', resizeAnnotationCanvas);
@@ -793,9 +798,54 @@ function wait(ms) {
 function updateHostStats() {
   const peerCount = hostPeers.size;
   const autoTuneActive = latencyProfileEl.value === 'auto' ? ' | Auto tune on' : '';
-  hostStatsEl.textContent = mode === 'host'
-    ? `Connected viewers: ${peerCount}${autoTuneActive}`
-    : '';
+  if (mode === 'host') {
+    hostStatsEl.textContent = `Connected viewers: ${peerCount}${autoTuneActive}`;
+  } else if (viewerRoundTripTimeMs !== null || viewerRenderDelayMs !== null) {
+    const rtt = viewerRoundTripTimeMs === null ? '--' : `${Math.round(viewerRoundTripTimeMs)} ms`;
+    const render = viewerRenderDelayMs === null ? '--' : `${Math.round(viewerRenderDelayMs)} ms`;
+    hostStatsEl.textContent = `Network RTT: ${rtt} | Render delay: ${render}`;
+  } else {
+    hostStatsEl.textContent = '';
+  }
+}
+
+function startViewerLatencyTelemetry(peer) {
+  stopViewerLatencyTelemetry();
+
+  if (typeof videoEl.requestVideoFrameCallback === 'function') {
+    const measureFrame = (_now, metadata) => {
+      viewerRenderDelayMs = Math.max(0, performance.now() - metadata.presentationTime);
+      updateHostStats();
+      if (viewerPc === peer) videoEl.requestVideoFrameCallback(measureFrame);
+    };
+    videoEl.requestVideoFrameCallback(measureFrame);
+  }
+
+  viewerLatencyTimer = setInterval(async () => {
+    if (viewerPc !== peer) return;
+    const stats = await peer.getStats();
+    for (const report of stats.values()) {
+      if (report.type === 'candidate-pair' && (report.nominated || report.selected)) {
+        if (Number.isFinite(Number(report.currentRoundTripTime))) {
+          viewerRoundTripTimeMs = Number(report.currentRoundTripTime) * 1000;
+        }
+      }
+      if (report.type === 'remote-inbound-rtp' && report.kind === 'video' && Number.isFinite(Number(report.roundTripTime))) {
+        viewerRoundTripTimeMs = Number(report.roundTripTime) * 1000;
+      }
+    }
+    updateHostStats();
+  }, 1000);
+}
+
+function stopViewerLatencyTelemetry() {
+  if (viewerLatencyTimer) {
+    clearInterval(viewerLatencyTimer);
+    viewerLatencyTimer = null;
+  }
+  viewerRenderDelayMs = null;
+  viewerRoundTripTimeMs = null;
+  updateHostStats();
 }
 
 async function refreshBackendState() {
@@ -895,6 +945,29 @@ function rtcConfig() {
     bundlePolicy: 'max-bundle',
     iceCandidatePoolSize: 10
   };
+}
+
+async function refreshTURNConfiguration() {
+  try {
+    const response = await fetch(`${DEFAULT_CODE_SERVICE_URL}/turn-config`);
+    if (!response.ok) return;
+    const config = await response.json();
+    if (!Array.isArray(config.servers) || !config.username || !config.credential) return;
+    backendIceServers.splice(0, backendIceServers.length,
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: config.servers, username: config.username, credential: config.credential }
+    );
+    console.info('[BlinkCast] Cloudflare TURN credentials refreshed');
+  } catch (error) {
+    console.warn('[BlinkCast] TURN refresh failed', error);
+  }
+}
+
+function startTURNRefresh() {
+  refreshTURNConfiguration();
+  if (turnRefreshTimer) clearInterval(turnRefreshTimer);
+  turnRefreshTimer = setInterval(refreshTURNConfiguration, 12 * 60 * 60 * 1000);
 }
 
 function connectSignaling() {
@@ -1341,7 +1414,10 @@ function makePeerConnection(role, targetViewerId = null) {
       }
       videoEl.muted = true;
       videoEl.play()
-        .then(() => setStatus('Stream live.'))
+        .then(() => {
+          startViewerLatencyTelemetry(peer);
+          setStatus('Stream live.');
+        })
         .catch((error) => {
           console.warn('[BlinkCast] viewer video autoplay failed', error);
           setStatus('Stream ready. Press play to view.');
@@ -1487,6 +1563,7 @@ function closeAllHostPeers() {
 }
 
 function resetViewerPeer() {
+  stopViewerLatencyTelemetry();
   viewerPendingIceCandidates = [];
   if (viewerPc) {
     try { viewerPc.close(); } catch {}
