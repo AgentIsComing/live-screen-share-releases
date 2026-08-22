@@ -478,6 +478,53 @@ input[type="color"] {
     linear-gradient(145deg, #0a0f17, #06080d);
 }
 
+.video-fullscreen {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 5;
+  padding: 8px 12px;
+  font-size: 12px;
+}
+
+.chat-panel {
+  margin-top: 4px;
+}
+
+.chat-messages {
+  min-height: 72px;
+  max-height: 190px;
+  overflow-y: auto;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.chat-message {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  color: var(--muted-strong);
+  font-size: 13px;
+}
+
+.chat-message strong {
+  color: #9fd1ff;
+}
+
+.chat-message.host strong {
+  color: #ffb28d;
+}
+
+.chat-compose {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
 .video-frame::before {
   content: "";
   position: absolute;

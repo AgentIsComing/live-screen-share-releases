@@ -50,6 +50,8 @@ const muteHostAudioBtn = document.getElementById('muteHostAudio');
 
 const bitrateEl = document.getElementById('bitrate');
 const latencyProfileEl = document.getElementById('latencyProfile');
+const streamingPresetEl = document.getElementById('streamingPreset');
+const allowAnnotationsEl = document.getElementById('allowAnnotations');
 const videoEl = document.getElementById('video');
 const annotationCanvasEl = document.getElementById('annotationCanvas');
 const annotationHintEl = document.getElementById('annotationHint');
@@ -60,16 +62,28 @@ const hostAnnotationPanelEl = document.getElementById('hostAnnotationPanel');
 const annotationViewerSelectEl = document.getElementById('annotationViewerSelect');
 const hostClearViewerBtn = document.getElementById('hostClearViewer');
 const hostClearAllBtn = document.getElementById('hostClearAll');
+const fullscreenViewerBtn = document.getElementById('fullscreenViewer');
+const chatMessagesEl = document.getElementById('chatMessages');
+const chatInputEl = document.getElementById('chatInput');
+const sendChatBtn = document.getElementById('sendChat');
+const chatStateEl = document.getElementById('chatState');
+const hostChatControlsEl = document.getElementById('hostChatControls');
+const toggleChatBtn = document.getElementById('toggleChat');
+const toggleViewerMuteBtn = document.getElementById('toggleViewerMute');
 
 const DEFAULT_CODE_SERVICE_URL = 'https://blinkcast-signaling.jaydenrmaine.workers.dev';
-const DRAWING_FEATURE_ENABLED = false;
+const DRAWING_FEATURE_ENABLED = true;
+const MAX_CHAT_MESSAGES = 100;
+const MAX_CHAT_LENGTH = 500;
 
 const storageKeys = {
   mode: 'lss.mode',
   codeServiceUrl: 'lss.codeServiceUrl',
   bitrate: 'lss.bitrate',
   latencyProfile: 'lss.latencyProfile',
-  requiresApproval: 'lss.requiresApproval'
+  requiresApproval: 'lss.requiresApproval',
+  streamingPreset: 'lss.streamingPreset',
+  allowAnnotations: 'lss.allowAnnotations'
 };
 
 const backendIceServers = [
@@ -95,6 +109,11 @@ let sessionToken = '';
 let joinCode = '';
 let publishRoomCode = '';
 let requiresApproval = true;
+let allowAnnotations = false;
+let viewerAnnotationsAllowed = false;
+let chatEnabled = true;
+const mutedViewerIds = new Set();
+let selectedChatViewerId = null;
 const pendingViewerIds = new Set();
 let ws = null;
 let clientId = null;
@@ -156,6 +175,9 @@ async function init() {
   codeServiceUrlEl.value = localStorage.getItem(storageKeys.codeServiceUrl) || DEFAULT_CODE_SERVICE_URL;
   bitrateEl.value = localStorage.getItem(storageKeys.bitrate) || '16000000';
   latencyProfileEl.value = localStorage.getItem(storageKeys.latencyProfile) || 'auto';
+  streamingPresetEl.value = localStorage.getItem(storageKeys.streamingPreset) || 'custom';
+  allowAnnotations = localStorage.getItem(storageKeys.allowAnnotations) === 'true';
+  allowAnnotationsEl.checked = allowAnnotations;
   requiresApproval = localStorage.getItem(storageKeys.requiresApproval) !== 'false';
   if (requiresApprovalEl) requiresApprovalEl.checked = requiresApproval;
 
@@ -180,6 +202,14 @@ async function init() {
     if (localStream) {
       setStatus('Approval setting saved. Restart hosting to apply it.');
     }
+  });
+  streamingPresetEl?.addEventListener('change', applyStreamingPreset);
+  allowAnnotationsEl?.addEventListener('change', () => {
+    allowAnnotations = allowAnnotationsEl.checked;
+    localStorage.setItem(storageKeys.allowAnnotations, String(allowAnnotations));
+    if (!allowAnnotations) clearAnnotationOverlay();
+    updateAnnotationPermissionUI();
+    broadcastDrawingPermission();
   });
 
   if (startBackendBtn) startBackendBtn.addEventListener('click', startBackendFromApp);
@@ -231,6 +261,13 @@ async function init() {
   stopHostBtn.addEventListener('click', () => stopHost(true));
   pauseHostBtn?.addEventListener('click', toggleHostStreamPause);
   muteHostAudioBtn?.addEventListener('click', toggleHostAudioMute);
+  fullscreenViewerBtn?.addEventListener('click', toggleViewerFullscreen);
+  sendChatBtn?.addEventListener('click', sendChatMessage);
+  chatInputEl?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') sendChatMessage();
+  });
+  toggleChatBtn?.addEventListener('click', toggleRoomChat);
+  toggleViewerMuteBtn?.addEventListener('click', toggleSelectedViewerMute);
   startTURNRefresh();
   if (DRAWING_FEATURE_ENABLED) {
     document.addEventListener('keydown', onGlobalKeydown);
@@ -244,6 +281,7 @@ async function init() {
   }
 
   syncHostSourceUI();
+  updateChatUI();
   if (DRAWING_FEATURE_ENABLED) {
     updateAnnotationPermissionUI();
     resizeAnnotationCanvas();
@@ -276,6 +314,22 @@ function persistInputs() {
   localStorage.setItem(storageKeys.bitrate, bitrateEl.value);
   localStorage.setItem(storageKeys.latencyProfile, latencyProfileEl.value);
   localStorage.setItem(storageKeys.requiresApproval, String(requiresApproval));
+  localStorage.setItem(storageKeys.streamingPreset, streamingPresetEl?.value || 'custom');
+  localStorage.setItem(storageKeys.allowAnnotations, String(allowAnnotations));
+}
+
+function applyStreamingPreset() {
+  const preset = {
+    presentation: { latency: 'balanced', bitrate: '12000000' },
+    gaming: { latency: 'ultra', bitrate: '16000000' },
+    quality: { latency: 'balanced', bitrate: '30000000' }
+  }[streamingPresetEl.value];
+  if (preset) {
+    latencyProfileEl.value = preset.latency;
+    bitrateEl.value = preset.bitrate;
+  }
+  persistInputs();
+  onStreamingSettingsChanged();
 }
 
 function onStreamingSettingsChanged() {
@@ -324,6 +378,7 @@ function syncModeUI() {
   });
 
   videoEl.muted = isHost;
+  updateChatUI();
   if (DRAWING_FEATURE_ENABLED) {
     updateAnnotationViewerSelect();
   }
@@ -335,6 +390,7 @@ function onGlobalKeydown(event) {
   if (!event.ctrlKey || !event.shiftKey) return;
   if (event.repeat) return;
   if (String(event.key || '').toLowerCase() !== 'd') return;
+  if (!allowAnnotations) return;
 
   event.preventDefault();
   hostAllowsViewerDrawing = !hostAllowsViewerDrawing;
@@ -348,7 +404,8 @@ function onGlobalKeydown(event) {
 function updateAnnotationPermissionUI() {
   if (!DRAWING_FEATURE_ENABLED) return;
   if (!annotationCanvasEl || !annotationHintEl) return;
-  const drawingAllowedOnThisClient = mode === 'viewer' && viewerDrawingEnabled;
+  const drawingAllowedOnThisClient = (mode === 'host' ? allowAnnotations : viewerAnnotationsAllowed)
+    && mode === 'viewer' && viewerDrawingEnabled;
   annotationCanvasEl.classList.toggle('draw-enabled', drawingAllowedOnThisClient);
   viewerBrushColorEl.disabled = mode !== 'viewer' || !viewerDrawingEnabled;
   viewerClearOwnBtn.disabled = mode !== 'viewer';
@@ -362,9 +419,11 @@ function updateAnnotationPermissionUI() {
     return;
   }
 
-  annotationHintEl.textContent = viewerDrawingEnabled
-    ? 'Drawing enabled by host. Hold left-click and draw.'
-    : 'Host has drawing locked.';
+  annotationHintEl.textContent = mode === 'viewer' && !viewerAnnotationsAllowed
+    ? 'Annotations are disabled by the host.'
+    : viewerDrawingEnabled
+      ? 'Drawing enabled by host. Hold left-click and draw.'
+      : 'Host has drawing locked.';
 }
 
 function updateAnnotationViewerSelect() {
@@ -711,7 +770,8 @@ function sendDrawPermissionToViewer(viewerId) {
       to: viewerId,
       draw: {
         type: 'permission',
-        allowed: hostAllowsViewerDrawing
+        allowed: hostAllowsViewerDrawing,
+        enabled: allowAnnotations
       }
     }
   }));
@@ -731,6 +791,7 @@ function handleHostDrawSignal(drawPayload) {
   if (!DRAWING_FEATURE_ENABLED) return;
   if (!drawPayload || !drawPayload.type) return;
   if (drawPayload.type === 'permission') {
+    viewerAnnotationsAllowed = Boolean(drawPayload.enabled);
     viewerDrawingEnabled = Boolean(drawPayload.allowed);
     if (!viewerDrawingEnabled) {
       annotationPointerActive = false;
@@ -1223,26 +1284,103 @@ function moderateViewer(action, clientId) {
   renderPendingViewers();
 }
 
+function addChatMessage(message) {
+  if (!chatMessagesEl || !message?.text) return;
+  const row = document.createElement('div');
+  row.className = `chat-message ${message.role === 'host' ? 'host' : ''}`;
+  const author = document.createElement('strong');
+  author.textContent = message.role === 'host' ? 'Host' : String(message.from || 'Viewer').slice(0, 12);
+  const text = document.createElement('span');
+  text.textContent = String(message.text).slice(0, MAX_CHAT_LENGTH);
+  row.append(author, text);
+  chatMessagesEl.appendChild(row);
+  while (chatMessagesEl.children.length > MAX_CHAT_MESSAGES) chatMessagesEl.firstElementChild.remove();
+  chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+}
+
+function sendChatMessage() {
+  const text = chatInputEl?.value.trim().slice(0, MAX_CHAT_LENGTH);
+  if (!text || !chatEnabled || !joined || !ws || ws.readyState !== WebSocket.OPEN) return;
+  if (mode === 'viewer' && mutedViewerIds.has(clientId)) return;
+  const chat = { type: 'message', from: clientId, role: mode, text };
+  chatInputEl.value = '';
+  if (mode === 'host') {
+    addChatMessage(chat);
+    for (const viewerId of hostPeers.keys()) {
+      ws.send(JSON.stringify({ type: 'signal', data: { from: clientId, to: viewerId, chat } }));
+    }
+  } else {
+    ws.send(JSON.stringify({ type: 'signal', data: { from: clientId, chat } }));
+  }
+}
+
+function updateChatUI() {
+  const disabled = !chatEnabled || (mode === 'viewer' && mutedViewerIds.has(clientId));
+  if (chatStateEl) chatStateEl.textContent = disabled ? 'Chat restricted' : 'Authenticated';
+  if (chatInputEl) chatInputEl.disabled = disabled;
+  if (sendChatBtn) sendChatBtn.disabled = disabled;
+  if (hostChatControlsEl) hostChatControlsEl.classList.toggle('hidden', mode !== 'host');
+  if (toggleChatBtn) toggleChatBtn.textContent = chatEnabled ? 'Disable chat' : 'Enable chat';
+  if (toggleViewerMuteBtn) toggleViewerMuteBtn.disabled = !selectedChatViewerId;
+}
+
+function toggleRoomChat() {
+  if (mode !== 'host') return;
+  chatEnabled = !chatEnabled;
+  updateChatUI();
+  for (const viewerId of hostPeers.keys()) {
+    ws.send(JSON.stringify({ type: 'signal', data: { from: clientId, to: viewerId, chatControl: { enabled: chatEnabled } } }));
+  }
+}
+
+function toggleSelectedViewerMute() {
+  if (mode !== 'host' || !selectedChatViewerId || !ws || ws.readyState !== WebSocket.OPEN) return;
+  const muted = !mutedViewerIds.has(selectedChatViewerId);
+  if (muted) mutedViewerIds.add(selectedChatViewerId);
+  else mutedViewerIds.delete(selectedChatViewerId);
+  ws.send(JSON.stringify({ type: 'moderate', action: muted ? 'mute' : 'unmute', clientId: selectedChatViewerId }));
+  ws.send(JSON.stringify({ type: 'signal', data: { from: clientId, to: selectedChatViewerId, chatControl: { muted } } }));
+  updateChatUI();
+}
+
+function toggleViewerFullscreen() {
+  if (!videoEl) return;
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  else videoEl.requestFullscreen?.().catch(() => {});
+}
+
 function renderPendingViewers() {
   if (!viewerApprovalPanelEl || !pendingViewersEl || !pendingViewerCountEl) return;
   const pending = Array.from(pendingViewerIds);
-  viewerApprovalPanelEl.hidden = mode !== 'host' || !requiresApproval || pending.length === 0;
-  pendingViewerCountEl.textContent = `${pending.length} pending`;
-  pendingViewersEl.replaceChildren(...pending.map((viewerId) => {
+  const connected = Array.from(hostPeers.keys()).filter((viewerId) => !pendingViewerIds.has(viewerId));
+  viewerApprovalPanelEl.hidden = mode !== 'host' || (pending.length === 0 && connected.length === 0);
+  pendingViewerCountEl.textContent = `${pending.length} pending / ${connected.length} connected`;
+  pendingViewersEl.replaceChildren(...[...pending, ...connected].map((viewerId) => {
     const row = document.createElement('div');
     row.className = 'panel-actions';
     const label = document.createElement('span');
     label.textContent = viewerId.slice(0, 12);
-    const approve = document.createElement('button');
-    approve.type = 'button';
-    approve.textContent = 'Approve';
-    approve.addEventListener('click', () => moderateViewer('approve', viewerId));
-    const deny = document.createElement('button');
-    deny.type = 'button';
-    deny.className = 'ghost danger';
-    deny.textContent = 'Deny';
-    deny.addEventListener('click', () => moderateViewer('deny', viewerId));
-    row.append(label, approve, deny);
+    row.addEventListener('click', () => {
+      selectedChatViewerId = viewerId;
+      updateChatUI();
+    });
+    if (pendingViewerIds.has(viewerId)) {
+      const approve = document.createElement('button');
+      approve.type = 'button';
+      approve.textContent = 'Approve';
+      approve.addEventListener('click', () => moderateViewer('approve', viewerId));
+      const deny = document.createElement('button');
+      deny.type = 'button';
+      deny.className = 'ghost danger';
+      deny.textContent = 'Deny';
+      deny.addEventListener('click', () => moderateViewer('deny', viewerId));
+      row.append(label, approve, deny);
+    } else {
+      const connectedLabel = document.createElement('span');
+      connectedLabel.className = 'pill live';
+      connectedLabel.textContent = 'Connected';
+      row.append(label, connectedLabel);
+    }
     return row;
   }));
 }
@@ -2137,6 +2275,7 @@ async function startViewer() {
 function stopViewer() {
   resetViewerPeer();
   videoEl.srcObject = null;
+  viewerAnnotationsAllowed = false;
   viewerDrawingEnabled = false;
   annotationPointerActive = false;
   annotationStrokeId = null;
@@ -2149,12 +2288,15 @@ function createHostPeer(viewerId) {
   closeHostPeer(viewerId);
   const peer = makePeerConnection('host', viewerId);
   hostPeers.set(viewerId, peer);
+  selectedChatViewerId = viewerId;
   hostPendingIceCandidates.set(viewerId, hostPendingIceCandidates.get(viewerId) || []);
   adaptivePeerState.set(viewerId, createInitialAdaptiveState());
   syncPeerTracks(peer, localStream);
   sendDrawPermissionToViewer(viewerId);
   updateAnnotationViewerSelect();
   updateHostStats();
+  renderPendingViewers();
+  updateChatUI();
   syncAdaptiveStreamingLoop();
   return peer;
 }
@@ -2184,6 +2326,15 @@ async function handleSignal(data) {
   try {
     if (mode === 'host') {
       if (!localStream) return;
+
+      if (data.chat?.text && data.from && !mutedViewerIds.has(data.from) && chatEnabled) {
+        addChatMessage(data.chat);
+        for (const viewerId of hostPeers.keys()) {
+          if (viewerId === data.from) continue;
+          ws.send(JSON.stringify({ type: 'signal', data: { from: clientId, to: viewerId, chat: data.chat } }));
+        }
+        return;
+      }
 
       if (data.draw && data.from) {
         handleViewerDrawSignal(data.from, data.draw);
@@ -2222,6 +2373,20 @@ async function handleSignal(data) {
 
       if (data.draw) {
         handleHostDrawSignal(data.draw);
+        return;
+      }
+
+      if (data.chatControl) {
+        if (typeof data.chatControl.enabled === 'boolean') chatEnabled = data.chatControl.enabled;
+        if (typeof data.chatControl.muted === 'boolean') {
+          if (data.chatControl.muted) mutedViewerIds.add(clientId);
+          else mutedViewerIds.delete(clientId);
+        }
+        updateChatUI();
+        return;
+      }
+      if (data.chat?.text && chatEnabled && !mutedViewerIds.has(clientId)) {
+        addChatMessage(data.chat);
         return;
       }
 

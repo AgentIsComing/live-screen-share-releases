@@ -70,6 +70,16 @@
                 <option value="45000000">45 Mbps</option>
               </select>
             </label>
+
+            <label>
+              Streaming preset
+              <select id="streamingPreset">
+                <option value="custom">Custom settings</option>
+                <option value="presentation">Presentation</option>
+                <option value="gaming">Gaming</option>
+                <option value="quality">High quality</option>
+              </select>
+            </label>
           </div>
 
           <label id="codeServiceWrap" class="hidden" aria-hidden="true">
@@ -154,6 +164,10 @@
               <label class="toggle-row">
                 <input id="requiresApproval" type="checkbox" />
                 <span>Require viewer approval before hosting</span>
+              </label>
+              <label class="toggle-row">
+                <input id="allowAnnotations" type="checkbox" />
+                <span>Allow viewer annotations</span>
               </label>
             </section>
 
@@ -243,6 +257,25 @@
               </div>
             </div>
           </section>
+
+          <section class="surface-panel chat-panel" id="chatPanel">
+            <div class="panel-head">
+              <div>
+                <p class="section-kicker">Room safety</p>
+                <h3>Room chat</h3>
+              </div>
+              <span class="pill neutral" id="chatState">Authenticated</span>
+            </div>
+            <div id="chatMessages" class="chat-messages" aria-live="polite"></div>
+            <div class="chat-compose">
+              <input id="chatInput" type="text" maxlength="500" placeholder="Write a message" />
+              <button id="sendChat" type="button">Send</button>
+            </div>
+            <div id="hostChatControls" class="panel-actions hidden">
+              <button id="toggleChat" type="button" class="ghost">Disable chat</button>
+              <button id="toggleViewerMute" type="button" class="ghost danger">Mute selected viewer</button>
+            </div>
+          </section>
         </section>
 
         <section id="hostAnnotationPanel" class="workspace-card hidden">
@@ -276,6 +309,7 @@
           </div>
           <div class="video-frame">
             <video id="video" autoplay playsinline controls></video>
+            <button id="fullscreenViewer" class="video-fullscreen ghost" type="button" title="Enter fullscreen">Fullscreen</button>
             <canvas id="annotationCanvas" aria-label="Live annotations"></canvas>
             <div id="annotationHint" class="annotation-hint">Host drawing lock: ON (Ctrl+Shift+D to allow)</div>
           </div>
