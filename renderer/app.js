@@ -84,6 +84,8 @@ let mode = 'host';
 let signalUrl = '';
 let roomId = '';
 let roomPassword = '';
+let sessionToken = '';
+let joinCode = '';
 let publishRoomCode = '';
 let ws = null;
 let clientId = null;
@@ -948,6 +950,28 @@ function rtcConfig() {
 }
 
 async function refreshTURNConfiguration() {
+  if (!sessionToken || !roomId) return;
+  try {
+    const url = new URL(`${DEFAULT_CODE_SERVICE_URL}/turn-config`);
+    url.searchParams.set('roomId', roomId);
+    url.searchParams.set('code', joinCode);
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${sessionToken}` }
+    });
+    if (!response.ok) return;
+    const config = await response.json();
+    if (!Array.isArray(config.servers) || !config.username || !config.credential) return;
+    backendIceServers.splice(0, backendIceServers.length,
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: config.servers, username: config.username, credential: config.credential }
+    );
+  } catch (error) {
+    console.warn('[BlinkCast] TURN refresh failed', error);
+  }
+}
+
+async function refreshTURNConfiguration() {
   try {
     const response = await fetch(`${DEFAULT_CODE_SERVICE_URL}/turn-config`);
     if (!response.ok) return;
@@ -989,7 +1013,13 @@ function connectSignaling() {
       reconnectTimer = null;
     }
     joined = false;
-    ws.send(JSON.stringify({ type: 'join', role: mode, roomId, clientId }));
+    ws.send(JSON.stringify({
+      type: 'join',
+      role: mode,
+      roomId,
+      clientId,
+      ...(sessionToken ? { sessionToken, code: joinCode } : {})
+    }));
   });
 
   ws.addEventListener('message', async (event) => {
@@ -1214,6 +1244,7 @@ async function connectViewerByRoomPassword() {
 
   roomId = viewerRoomId;
   roomPassword = password;
+  joinCode = '';
 
   const result = await window.desktopApp.resolveRoomAccess({
     baseUrl: DEFAULT_CODE_SERVICE_URL,
@@ -1227,6 +1258,8 @@ async function connectViewerByRoomPassword() {
   }
 
   signalUrl = normalizeSignalUrl(result.wsUrl);
+  sessionToken = result.sessionToken || '';
+  await refreshTURNConfiguration();
   reconnectSignaling();
 
   const ready = await waitForSignalingJoin();
@@ -1266,7 +1299,10 @@ async function connectViewerByJoinCode() {
   }
 
   roomId = result.roomId;
+  joinCode = code;
+  sessionToken = result.sessionToken || '';
   signalUrl = normalizeSignalUrl(result.wsUrl);
+  await refreshTURNConfiguration();
   reconnectSignaling();
   const ready = await waitForSignalingJoin();
   if (!ready) {
