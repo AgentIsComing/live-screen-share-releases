@@ -1309,26 +1309,6 @@ async function confirmHostStartFromModal() {
     }
   }
 
-  if (!signalUrl) {
-    signalUrl = normalizeSignalUrl(await window.desktopApp.getTunnelUrl());
-  }
-  if (!signalUrl) {
-    setStatus('No tunnel signaling URL available yet.');
-    hostStarting = false;
-    startHostBtn.disabled = false;
-    return;
-  }
-
-  setStatus('Connecting signaling...');
-  reconnectSignaling();
-  const ready = await waitForSignalingJoin();
-  if (!ready) {
-    setStatus('Signaling join timed out.');
-    hostStarting = false;
-    startHostBtn.disabled = false;
-    return;
-  }
-
   const baseUrl = (codeServiceUrlEl.value || DEFAULT_CODE_SERVICE_URL).trim();
   const workerSignalUrl = normalizeSignalUrl(`${baseUrl}/signal`);
   if (!workerSignalUrl) {
@@ -1357,6 +1337,13 @@ async function confirmHostStartFromModal() {
   publishRoomCode = publish.code || '';
   sessionToken = publish.sessionToken || '';
   joinCode = publishRoomCode;
+  signalUrl = normalizeSignalUrl(publish.wsUrl || workerSignalUrl);
+  if (!signalUrl || !sessionToken) {
+    setStatus('Room registration did not return host authorization.');
+    hostStarting = false;
+    startHostBtn.disabled = false;
+    return;
+  }
   if (ws) {
     try { ws.close(); } catch {}
     ws = null;

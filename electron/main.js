@@ -503,6 +503,8 @@ ipcMain.handle('register-room-access', async (_event, payload = {}) => {
       ok: true,
       roomId: result.roomId,
       code: result.code || null,
+      wsUrl: result.wsUrl || null,
+      sessionToken: result.sessionToken || null,
       expiresAt: result.expiresAt || null
     };
   } catch (error) {
