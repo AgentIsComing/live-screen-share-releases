@@ -117,6 +117,8 @@ let viewerPendingIceCandidates = [];
 let viewerLatencyTimer = null;
 let viewerRenderDelayMs = null;
 let viewerRoundTripTimeMs = null;
+let viewerCaptureToPresentationMs = null;
+let viewerRoute = 'Unknown';
 const hostPeers = new Map();
 const hostPendingIceCandidates = new Map();
 const adaptivePeerState = new Map();
@@ -802,13 +804,15 @@ function updateHostStats() {
   const autoTuneActive = latencyProfileEl.value === 'auto' ? ' | Auto tune on' : '';
   if (mode === 'host') {
     hostStatsEl.textContent = `Connected viewers: ${peerCount}${autoTuneActive}`;
-  } else if (viewerRoundTripTimeMs !== null || viewerRenderDelayMs !== null) {
+  } else if (viewerRoundTripTimeMs !== null || viewerRenderDelayMs !== null || viewerCaptureToPresentationMs !== null) {
     const rtt = viewerRoundTripTimeMs === null ? '--' : `${Math.round(viewerRoundTripTimeMs)} ms`;
     const render = viewerRenderDelayMs === null ? '--' : `${Math.round(viewerRenderDelayMs)} ms`;
-    const estimated = viewerRoundTripTimeMs === null || viewerRenderDelayMs === null
-      ? '--'
-      : `${Math.round((viewerRoundTripTimeMs / 2) + viewerRenderDelayMs)} ms`;
-    hostStatsEl.textContent = `Estimated end-to-end: ${estimated} | RTT: ${rtt} | Render: ${render}`;
+    const endToEnd = viewerCaptureToPresentationMs === null
+      ? 'Estimate unavailable'
+      : `Capture to display: ${Math.round(viewerCaptureToPresentationMs)} ms`;
+    hostStatsEl.textContent = `${endToEnd} | RTT: ${rtt} | Render: ${render}`;
+    const routeBadge = document.getElementById('routeBadge');
+    if (routeBadge) routeBadge.textContent = viewerRoute;
   } else {
     hostStatsEl.textContent = '';
   }
@@ -820,6 +824,11 @@ function startViewerLatencyTelemetry(peer) {
   if (typeof videoEl.requestVideoFrameCallback === 'function') {
     const measureFrame = (_now, metadata) => {
       viewerRenderDelayMs = Math.max(0, performance.now() - metadata.presentationTime);
+      if (Number.isFinite(Number(metadata.captureTime))) {
+        viewerCaptureToPresentationMs = Math.max(0, performance.now() - Number(metadata.captureTime));
+      } else if (Number.isFinite(Number(metadata.receiveTime))) {
+        viewerCaptureToPresentationMs = null;
+      }
       updateHostStats();
       if (viewerPc === peer) videoEl.requestVideoFrameCallback(measureFrame);
     };
@@ -829,10 +838,25 @@ function startViewerLatencyTelemetry(peer) {
   viewerLatencyTimer = setInterval(async () => {
     if (viewerPc !== peer) return;
     const stats = await peer.getStats();
+    const reports = new Map();
+    for (const report of stats.values()) reports.set(report.id, report);
     for (const report of stats.values()) {
       if (report.type === 'candidate-pair' && (report.nominated || report.selected)) {
         if (Number.isFinite(Number(report.currentRoundTripTime))) {
           viewerRoundTripTimeMs = Number(report.currentRoundTripTime) * 1000;
+        }
+        const local = reports.get(report.localCandidateId);
+        const remote = reports.get(report.remoteCandidateId);
+        const candidate = local || remote;
+        if (local?.candidateType === 'relay' || remote?.candidateType === 'relay') {
+          const relayProtocol = local?.relayProtocol || remote?.relayProtocol || candidate?.protocol;
+          viewerRoute = relayProtocol === 'tls'
+            ? 'TLS relay'
+            : relayProtocol === 'tcp'
+              ? 'TCP relay'
+              : 'UDP relay';
+        } else if (local || remote) {
+          viewerRoute = 'Direct';
         }
       }
       if (report.type === 'remote-inbound-rtp' && report.kind === 'video' && Number.isFinite(Number(report.roundTripTime))) {
@@ -850,6 +874,10 @@ function stopViewerLatencyTelemetry() {
   }
   viewerRenderDelayMs = null;
   viewerRoundTripTimeMs = null;
+  viewerCaptureToPresentationMs = null;
+  viewerRoute = 'Unknown';
+  const routeBadge = document.getElementById('routeBadge');
+  if (routeBadge) routeBadge.textContent = 'Route unknown';
   updateHostStats();
 }
 
