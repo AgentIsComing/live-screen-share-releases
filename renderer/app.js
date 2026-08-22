@@ -92,6 +92,7 @@ let clientId = null;
 let pendingOffer = false;
 let joined = false;
 let hostAvailable = false;
+let viewerApproved = false;
 let reconnectTimer = null;
 let lastStatusText = '';
 let lastUpdateText = '';
@@ -1002,23 +1003,6 @@ async function refreshTURNConfiguration() {
   }
 }
 
-async function refreshTURNConfiguration() {
-  try {
-    const response = await fetch(`${DEFAULT_CODE_SERVICE_URL}/turn-config`);
-    if (!response.ok) return;
-    const config = await response.json();
-    if (!Array.isArray(config.servers) || !config.username || !config.credential) return;
-    backendIceServers.splice(0, backendIceServers.length,
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: config.servers, username: config.username, credential: config.credential }
-    );
-    console.info('[BlinkCast] Cloudflare TURN credentials refreshed');
-  } catch (error) {
-    console.warn('[BlinkCast] TURN refresh failed', error);
-  }
-}
-
 function startTURNRefresh() {
   refreshTURNConfiguration();
   if (turnRefreshTimer) clearInterval(turnRefreshTimer);
@@ -1059,8 +1043,9 @@ function connectSignaling() {
     if (message.type === 'joined') {
       joined = true;
       hostAvailable = Boolean(message.hostAvailable);
+      viewerApproved = mode === 'host';
       if (mode === 'viewer') {
-        if (hostAvailable) {
+        if (hostAvailable && viewerApproved) {
           if (!isViewerPlaybackActive()) {
             await startViewer();
           } else {
@@ -1078,11 +1063,22 @@ function connectSignaling() {
 
     if (message.type === 'host-available' && mode === 'viewer') {
       hostAvailable = true;
-      if (pendingOffer) {
+      if (pendingOffer && viewerApproved) {
         pendingOffer = false;
         if (!isViewerPlaybackActive()) {
           await startViewer();
         }
+      }
+      return;
+    }
+
+    if (message.type === 'approval' && mode === 'viewer') {
+      viewerApproved = message.status === 'approved';
+      if (viewerApproved && hostAvailable && !isViewerPlaybackActive()) {
+        pendingOffer = false;
+        await startViewer();
+      } else if (!viewerApproved) {
+        setStatus('Waiting for host approval...');
       }
       return;
     }
@@ -1106,6 +1102,7 @@ function connectSignaling() {
 
   ws.addEventListener('close', (event) => {
     joined = false;
+    viewerApproved = false;
     if (mode === 'host') {
       setStatus(`Signaling disconnected (code ${event.code}). Reconnecting...`);
     } else {
