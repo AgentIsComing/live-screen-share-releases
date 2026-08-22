@@ -2327,7 +2327,7 @@ async function handleSignal(data) {
     if (mode === 'host') {
       if (!localStream) return;
 
-      if (data.chat?.text && data.from && !mutedViewerIds.has(data.from) && chatEnabled) {
+      if (data.chat?.text && data.from && !pendingViewerIds.has(data.from) && !mutedViewerIds.has(data.from) && chatEnabled) {
         addChatMessage(data.chat);
         for (const viewerId of hostPeers.keys()) {
           if (viewerId === data.from) continue;
