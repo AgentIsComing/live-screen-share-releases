@@ -10,9 +10,9 @@
   --text: #eff5ff;
   --muted: #9aa9c2;
   --muted-strong: #c7d2e6;
-  --accent: #ff6b57;
-  --accent-deep: #b93f34;
-  --accent-glow: rgba(255, 107, 87, 0.28);
+  --accent: #6d8dff;
+  --accent-deep: #4f5fc5;
+  --accent-glow: rgba(109, 141, 255, 0.28);
   --success: #2fdaa2;
   --warning: #ffbf61;
   --danger: #ff5e73;
@@ -33,8 +33,8 @@ body {
   color: var(--text);
   font-family: "Segoe UI Variable Display", "Bahnschrift", "Trebuchet MS", sans-serif;
   background:
-    radial-gradient(1100px 720px at -10% -18%, rgba(255, 107, 87, 0.18), transparent 58%),
-    radial-gradient(900px 620px at 110% -10%, rgba(64, 124, 255, 0.14), transparent 56%),
+    radial-gradient(1100px 720px at -10% -18%, rgba(109, 141, 255, 0.18), transparent 58%),
+    radial-gradient(900px 620px at 110% -10%, rgba(171, 112, 255, 0.14), transparent 56%),
     linear-gradient(180deg, #111723 0%, #0a0d14 100%);
 }
 
@@ -101,7 +101,7 @@ textarea {
   height: 62px;
   border-radius: 18px;
   position: relative;
-  background: linear-gradient(145deg, #ff846e, #d74937);
+  background: linear-gradient(145deg, #7da2ff, #6254c7);
   box-shadow: 0 16px 30px var(--accent-glow);
   overflow: hidden;
 }

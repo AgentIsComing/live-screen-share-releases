@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Live Screen Share Desktop</title>
+    <title>BlinkCast</title>
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
@@ -16,8 +16,8 @@
             <span></span>
           </div>
           <div>
-            <p class="eyebrow">Remote streaming</p>
-            <h1>Live Screen Share</h1>
+            <p class="eyebrow">BlinkCast</p>
+            <h1>BlinkCast</h1>
             <p class="sub">Desktop-grade hosting and viewing with room-based access.</p>
           </div>
         </section>
@@ -40,17 +40,13 @@
         <section class="sidebar-card host-only" id="hostControlRail">
           <div class="rail-head">
             <div>
-              <p class="section-kicker">Signal</p>
-              <h2>Session backend</h2>
+              <p class="section-kicker">Connection</p>
+              <h2>Stream controls</h2>
             </div>
             <span class="pill neutral" id="routeBadge">Route unknown</span>
           </div>
 
-          <div id="connectivityWrap" class="action-stack">
-            <button id="startBackend" type="button">Start backend</button>
-            <button id="stopBackend" type="button" class="ghost danger" disabled>Stop backend</button>
-            <button id="checkUpdates" type="button" class="ghost">Check app updates</button>
-          </div>
+          <div id="connectivityWrap" class="action-stack hidden" aria-hidden="true"></div>
 
           <div class="grid duo compact">
             <label id="latencyWrap">
@@ -76,7 +72,7 @@
             </label>
           </div>
 
-          <label id="codeServiceWrap" class="hidden">
+          <label id="codeServiceWrap" class="hidden" aria-hidden="true">
             Code service URL (host advanced)
             <input id="codeServiceUrl" type="text" placeholder="https://blinkcast-signaling.jaydenrmaine.workers.dev" />
           </label>
@@ -97,6 +93,7 @@
         <section class="sidebar-card version-panel">
           <p class="section-kicker">Build</p>
           <small id="version"></small>
+          <button id="checkUpdates" type="button" class="ghost">Check for updates</button>
         </section>
       </aside>
 

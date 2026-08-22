@@ -120,6 +120,8 @@ let viewerRenderDelayMs = null;
 let viewerRoundTripTimeMs = null;
 let viewerCaptureToPresentationMs = null;
 let viewerRoute = 'Unknown';
+let viewerIceRestartInFlight = false;
+let viewerIceRestartTimer = null;
 const hostPeers = new Map();
 const hostPendingIceCandidates = new Map();
 const adaptivePeerState = new Map();
@@ -158,9 +160,9 @@ async function init() {
   });
   [codeServiceUrlEl, bitrateEl, latencyProfileEl].forEach((el) => el.addEventListener('change', onStreamingSettingsChanged));
 
-  startBackendBtn.addEventListener('click', startBackendFromApp);
-  stopBackendBtn.addEventListener('click', stopBackendFromApp);
-  checkUpdatesBtn.addEventListener('click', manualCheckForUpdates);
+  if (startBackendBtn) startBackendBtn.addEventListener('click', startBackendFromApp);
+  if (stopBackendBtn) stopBackendBtn.addEventListener('click', stopBackendFromApp);
+  if (checkUpdatesBtn) checkUpdatesBtn.addEventListener('click', manualCheckForUpdates);
   connectRoomBtn.addEventListener('click', connectViewerByRoomPassword);
   joinCodeBtn.addEventListener('click', connectViewerByJoinCode);
   if (DRAWING_FEATURE_ENABLED) {
@@ -287,8 +289,8 @@ function syncModeUI() {
   }
 
   modeEl.parentElement.classList.remove('hidden');
-  codeServiceWrapEl.classList.toggle('hidden', !isHost);
-  connectivityWrapEl.classList.toggle('hidden', !isHost);
+  if (codeServiceWrapEl) codeServiceWrapEl.classList.add('hidden');
+  if (connectivityWrapEl) connectivityWrapEl.classList.add('hidden');
   latencyWrapEl.classList.toggle('hidden', !isHost);
   bitrateWrapEl.classList.toggle('hidden', !isHost);
   modeButtons.forEach((button) => {
@@ -819,6 +821,31 @@ function updateHostStats() {
   }
 }
 
+function updateRouteBadge(route) {
+  const routeBadge = document.getElementById('routeBadge');
+  if (routeBadge) routeBadge.textContent = `Route ${String(route).toLowerCase()}`;
+}
+
+async function updatePeerRoute(peer) {
+  try {
+    const reports = new Map();
+    for (const report of (await peer.getStats()).values()) reports.set(report.id, report);
+    for (const report of reports.values()) {
+      if (report.type !== 'candidate-pair' || (!report.nominated && !report.selected)) continue;
+      const local = reports.get(report.localCandidateId);
+      const remote = reports.get(report.remoteCandidateId);
+      if (local?.candidateType === 'relay' || remote?.candidateType === 'relay') {
+        const protocol = local?.relayProtocol || remote?.relayProtocol || local?.protocol || remote?.protocol;
+        viewerRoute = protocol === 'tls' ? 'TLS relay' : protocol === 'tcp' ? 'TCP relay' : 'UDP relay';
+      } else if (local || remote) {
+        viewerRoute = 'Direct';
+      }
+      updateRouteBadge(viewerRoute);
+      return;
+    }
+  } catch {}
+}
+
 function startViewerLatencyTelemetry(peer) {
   stopViewerLatencyTelemetry();
 
@@ -889,8 +916,8 @@ async function refreshBackendState() {
 
 function handleBackendStatus(state) {
   backendRunning = Boolean(state?.signalRunning) && Boolean(state?.tunnelRunning);
-  startBackendBtn.disabled = backendRunning || backendStarting || hostStarting;
-  stopBackendBtn.disabled = !Boolean(state?.signalRunning || state?.tunnelRunning);
+  if (startBackendBtn) startBackendBtn.disabled = backendRunning || backendStarting || hostStarting;
+  if (stopBackendBtn) stopBackendBtn.disabled = !Boolean(state?.signalRunning || state?.tunnelRunning);
 
   if (state?.wsUrl) {
     signalUrl = state.wsUrl;
@@ -1057,6 +1084,15 @@ function connectSignaling() {
         }
       } else {
         setStatus('Host signaling ready.');
+      }
+      return;
+    }
+
+    if (message.type === 'viewer-join-request' && mode === 'host') {
+      const viewerId = message.viewer?.clientId;
+      if (viewerId && ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'moderate', action: 'approve', clientId: viewerId }));
+        setStatus(`Viewer ${viewerId.slice(0, 8)} approved. Starting stream...`);
       }
       return;
     }
@@ -1454,17 +1490,16 @@ function makePeerConnection(role, targetViewerId = null) {
         viewerFormEl.classList.add('hidden');
         tuneReceiversForLatency(peer);
       }
-      if (state === 'failed') {
-        setStatus('Viewer connection failed. Check ICE/TURN connectivity.');
-        stopViewer();
-      } else if (state === 'disconnected') {
+      if (state === 'failed' || state === 'disconnected') {
         setStatus('Viewer connection interrupted. Reconnecting...');
+        attemptViewerIceRestart(peer);
       }
       return;
     }
 
     if (state === 'connected') {
       clearHostPeerDisconnectTimer(targetViewerId);
+      if (role === 'host') updatePeerRoute(peer);
     }
     if (state === 'disconnected') {
       scheduleHostPeerDisconnectClose(targetViewerId, peer);
@@ -1642,6 +1677,11 @@ function closeAllHostPeers() {
 
 function resetViewerPeer() {
   stopViewerLatencyTelemetry();
+  viewerIceRestartInFlight = false;
+  if (viewerIceRestartTimer) {
+    clearTimeout(viewerIceRestartTimer);
+    viewerIceRestartTimer = null;
+  }
   viewerPendingIceCandidates = [];
   if (viewerPc) {
     try { viewerPc.close(); } catch {}
@@ -1951,6 +1991,25 @@ function createHostPeer(viewerId) {
   return peer;
 }
 
+async function attemptViewerIceRestart(peer) {
+  if (viewerIceRestartInFlight || viewerPc !== peer || !ws || ws.readyState !== WebSocket.OPEN) return;
+  viewerIceRestartInFlight = true;
+  try {
+    const offer = await peer.createOffer({ iceRestart: true });
+    await peer.setLocalDescription(offer);
+    ws.send(JSON.stringify({ type: 'signal', data: { from: clientId, offer: peer.localDescription } }));
+    viewerIceRestartTimer = setTimeout(() => {
+      if (viewerPc === peer && peer.connectionState !== 'connected') stopViewer();
+      viewerIceRestartInFlight = false;
+      viewerIceRestartTimer = null;
+    }, 8000);
+  } catch (error) {
+    console.warn('[BlinkCast] ICE restart failed', error);
+    viewerIceRestartInFlight = false;
+    stopViewer();
+  }
+}
+
 async function handleSignal(data) {
   if (!data) return;
 
@@ -1965,7 +2024,7 @@ async function handleSignal(data) {
 
       if (data.offer && data.from) {
         const viewerId = data.from;
-        const peer = createHostPeer(viewerId);
+        const peer = hostPeers.get(viewerId) || createHostPeer(viewerId);
 
         await peer.setRemoteDescription(data.offer);
         await flushHostPendingIceCandidates(viewerId);
