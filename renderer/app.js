@@ -29,6 +29,10 @@ const statusBadgeEl = document.getElementById('statusBadge');
 const versionEl = document.getElementById('version');
 const hostStatsEl = document.getElementById('hostStats');
 const captureModeDisplayEl = document.getElementById('captureModeDisplay');
+const requiresApprovalEl = document.getElementById('requiresApproval');
+const viewerApprovalPanelEl = document.getElementById('viewerApprovalPanel');
+const pendingViewersEl = document.getElementById('pendingViewers');
+const pendingViewerCountEl = document.getElementById('pendingViewerCount');
 
 const hostPanel = document.getElementById('hostPanel');
 const viewerPanel = document.getElementById('viewerPanel');
@@ -62,7 +66,8 @@ const storageKeys = {
   mode: 'lss.mode',
   codeServiceUrl: 'lss.codeServiceUrl',
   bitrate: 'lss.bitrate',
-  latencyProfile: 'lss.latencyProfile'
+  latencyProfile: 'lss.latencyProfile',
+  requiresApproval: 'lss.requiresApproval'
 };
 
 const backendIceServers = [
@@ -87,6 +92,8 @@ let roomPassword = '';
 let sessionToken = '';
 let joinCode = '';
 let publishRoomCode = '';
+let requiresApproval = true;
+const pendingViewerIds = new Set();
 let ws = null;
 let clientId = null;
 let pendingOffer = false;
@@ -144,6 +151,8 @@ async function init() {
   codeServiceUrlEl.value = localStorage.getItem(storageKeys.codeServiceUrl) || DEFAULT_CODE_SERVICE_URL;
   bitrateEl.value = localStorage.getItem(storageKeys.bitrate) || '16000000';
   latencyProfileEl.value = localStorage.getItem(storageKeys.latencyProfile) || 'auto';
+  requiresApproval = localStorage.getItem(storageKeys.requiresApproval) !== 'false';
+  if (requiresApprovalEl) requiresApprovalEl.checked = requiresApproval;
 
   mode = modeEl.value;
   syncModeUI();
@@ -159,6 +168,11 @@ async function init() {
     });
   });
   [codeServiceUrlEl, bitrateEl, latencyProfileEl].forEach((el) => el.addEventListener('change', onStreamingSettingsChanged));
+  requiresApprovalEl?.addEventListener('change', () => {
+    requiresApproval = requiresApprovalEl.checked;
+    localStorage.setItem(storageKeys.requiresApproval, String(requiresApproval));
+    renderPendingViewers();
+  });
 
   if (startBackendBtn) startBackendBtn.addEventListener('click', startBackendFromApp);
   if (stopBackendBtn) stopBackendBtn.addEventListener('click', stopBackendFromApp);
@@ -251,6 +265,7 @@ function persistInputs() {
   localStorage.setItem(storageKeys.codeServiceUrl, codeServiceUrlEl.value.trim());
   localStorage.setItem(storageKeys.bitrate, bitrateEl.value);
   localStorage.setItem(storageKeys.latencyProfile, latencyProfileEl.value);
+  localStorage.setItem(storageKeys.requiresApproval, String(requiresApproval));
 }
 
 function onStreamingSettingsChanged() {
@@ -266,6 +281,7 @@ function onModeChange() {
   mode = modeEl.value;
   persistInputs();
   syncModeUI();
+  renderPendingViewers();
   syncAdaptiveStreamingLoop();
   if (DRAWING_FEATURE_ENABLED) {
     clearAnnotationOverlay();
@@ -1060,7 +1076,8 @@ function connectSignaling() {
       role: mode,
       roomId,
       clientId,
-      ...(sessionToken ? { sessionToken, code: joinCode } : {})
+      ...(sessionToken ? { sessionToken, code: joinCode } : {}),
+      ...(mode === 'host' ? { requiresApproval } : {})
     }));
   });
 
@@ -1091,8 +1108,9 @@ function connectSignaling() {
     if (message.type === 'viewer-join-request' && mode === 'host') {
       const viewerId = message.viewer?.clientId;
       if (viewerId && ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'moderate', action: 'approve', clientId: viewerId }));
-        setStatus(`Viewer ${viewerId.slice(0, 8)} approved. Starting stream...`);
+        pendingViewerIds.add(viewerId);
+        renderPendingViewers();
+        setStatus(`Viewer ${viewerId.slice(0, 8)} is waiting for approval.`);
       }
       return;
     }
@@ -1158,6 +1176,37 @@ function connectSignaling() {
       }
     }, 2000);
   });
+}
+
+function moderateViewer(action, clientId) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'moderate', action, clientId }));
+  pendingViewerIds.delete(clientId);
+  renderPendingViewers();
+}
+
+function renderPendingViewers() {
+  if (!viewerApprovalPanelEl || !pendingViewersEl || !pendingViewerCountEl) return;
+  const pending = Array.from(pendingViewerIds);
+  viewerApprovalPanelEl.hidden = mode !== 'host' || !requiresApproval || pending.length === 0;
+  pendingViewerCountEl.textContent = `${pending.length} pending`;
+  pendingViewersEl.replaceChildren(...pending.map((viewerId) => {
+    const row = document.createElement('div');
+    row.className = 'panel-actions';
+    const label = document.createElement('span');
+    label.textContent = viewerId.slice(0, 12);
+    const approve = document.createElement('button');
+    approve.type = 'button';
+    approve.textContent = 'Approve';
+    approve.addEventListener('click', () => moderateViewer('approve', viewerId));
+    const deny = document.createElement('button');
+    deny.type = 'button';
+    deny.className = 'ghost danger';
+    deny.textContent = 'Deny';
+    deny.addEventListener('click', () => moderateViewer('deny', viewerId));
+    row.append(label, approve, deny);
+    return row;
+  }));
 }
 
 function reconnectSignaling() {

@@ -149,6 +149,10 @@
                   <select id="cameraDevice"></select>
                 </label>
               </div>
+              <label class="toggle-row">
+                <input id="requiresApproval" type="checkbox" />
+                <span>Require viewer approval</span>
+              </label>
             </section>
 
             <section class="surface-panel">
@@ -179,6 +183,17 @@
               </div>
             </section>
           </div>
+
+          <section class="surface-panel" id="viewerApprovalPanel" hidden>
+            <div class="panel-head">
+              <div>
+                <p class="section-kicker">Session access</p>
+                <h3>Viewer approval</h3>
+              </div>
+              <span class="pill neutral" id="pendingViewerCount">0 pending</span>
+            </div>
+            <div id="pendingViewers" class="action-stack"></div>
+          </section>
         </section>
 
         <section id="viewerPanel" class="workspace-card viewer-layout hidden">
