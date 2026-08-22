@@ -1330,6 +1330,14 @@ async function confirmHostStartFromModal() {
   }
 
   const baseUrl = (codeServiceUrlEl.value || DEFAULT_CODE_SERVICE_URL).trim();
+  const workerSignalUrl = normalizeSignalUrl(`${baseUrl}/signal`);
+  if (!workerSignalUrl) {
+    setStatus('Invalid BlinkCast signaling service URL.');
+    hostStarting = false;
+    startHostBtn.disabled = false;
+    return;
+  }
+  signalUrl = workerSignalUrl;
   setStatus('Publishing room...');
   const publish = await window.desktopApp.registerRoomAccess({
     baseUrl,
