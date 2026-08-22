@@ -172,6 +172,9 @@ async function init() {
     requiresApproval = requiresApprovalEl.checked;
     localStorage.setItem(storageKeys.requiresApproval, String(requiresApproval));
     renderPendingViewers();
+    if (localStream) {
+      setStatus('Approval setting saved. Restart hosting to apply it.');
+    }
   });
 
   if (startBackendBtn) startBackendBtn.addEventListener('click', startBackendFromApp);
