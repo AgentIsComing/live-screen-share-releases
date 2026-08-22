@@ -1087,7 +1087,7 @@ function connectSignaling() {
     if (message.type === 'joined') {
       joined = true;
       hostAvailable = Boolean(message.hostAvailable);
-      viewerApproved = mode === 'host';
+      viewerApproved = mode === 'host' || message.requiresModeration === false;
       if (mode === 'viewer') {
         if (hostAvailable && viewerApproved) {
           if (!isViewerPlaybackActive()) {
@@ -1112,6 +1112,17 @@ function connectSignaling() {
         renderPendingViewers();
         setStatus(`Viewer ${viewerId.slice(0, 8)} is waiting for approval.`);
       }
+      return;
+    }
+
+    if (message.type === 'viewer-list' && mode === 'host') {
+      pendingViewerIds.clear();
+      for (const viewer of message.viewers || []) {
+        if (viewer.status === 'pending' && viewer.clientId) {
+          pendingViewerIds.add(viewer.clientId);
+        }
+      }
+      renderPendingViewers();
       return;
     }
 
@@ -1143,6 +1154,8 @@ function connectSignaling() {
     }
 
     if (message.type === 'broadcast-ended' && mode === 'viewer') {
+      pendingOffer = true;
+      hostAvailable = false;
       stopViewer();
       viewerFormEl.classList.remove('hidden');
       setStatus('Host stopped sharing.');
