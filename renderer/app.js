@@ -45,6 +45,8 @@ const audioDeviceEl = document.getElementById('audioDevice');
 const refreshDevicesBtn = document.getElementById('refreshDevices');
 const startHostBtn = document.getElementById('startHost');
 const stopHostBtn = document.getElementById('stopHost');
+const pauseHostBtn = document.getElementById('pauseHost');
+const muteHostAudioBtn = document.getElementById('muteHostAudio');
 
 const bitrateEl = document.getElementById('bitrate');
 const latencyProfileEl = document.getElementById('latencyProfile');
@@ -106,6 +108,8 @@ let lastUpdateText = '';
 let backendRunning = false;
 let backendStarting = false;
 let hostStarting = false;
+let hostStreamPaused = false;
+let hostAudioMuted = false;
 let suppressTrackEndedUntil = 0;
 let adaptiveTuneTimer = null;
 let adaptiveTuneInFlight = false;
@@ -133,6 +137,7 @@ const hostPeers = new Map();
 const hostPendingIceCandidates = new Map();
 const adaptivePeerState = new Map();
 const hostPeerDisconnectTimers = new Map();
+const hostIceRestartState = new Map();
 const annotationStrokeState = new Map();
 const annotationSegments = [];
 const MAX_ANNOTATION_SEGMENTS = 4000;
@@ -224,6 +229,8 @@ async function init() {
 
   startHostBtn.addEventListener('click', startHostWithPrompt);
   stopHostBtn.addEventListener('click', () => stopHost(true));
+  pauseHostBtn?.addEventListener('click', toggleHostStreamPause);
+  muteHostAudioBtn?.addEventListener('click', toggleHostAudioMute);
   startTURNRefresh();
   if (DRAWING_FEATURE_ENABLED) {
     document.addEventListener('keydown', onGlobalKeydown);
@@ -1085,7 +1092,13 @@ function connectSignaling() {
   });
 
   ws.addEventListener('message', async (event) => {
-    const message = JSON.parse(event.data);
+    let message;
+    try {
+      message = JSON.parse(event.data);
+    } catch {
+      setStatus('Received an invalid signaling message. Reconnecting...');
+      return;
+    }
 
     if (message.type === 'joined') {
       joined = true;
@@ -1196,6 +1209,10 @@ function connectSignaling() {
         connectSignaling();
       }
     }, 2000);
+  });
+
+  ws.addEventListener('error', () => {
+    setStatus('Signaling connection failed. Check the room and network, then retry.');
   });
 }
 
@@ -1564,12 +1581,19 @@ function makePeerConnection(role, targetViewerId = null) {
 
     if (state === 'connected') {
       clearHostPeerDisconnectTimer(targetViewerId);
+      const restartState = hostIceRestartState.get(targetViewerId);
+      if (restartState?.timer) clearTimeout(restartState.timer);
+      hostIceRestartState.delete(targetViewerId);
       if (role === 'host') updatePeerRoute(peer);
     }
     if (state === 'disconnected') {
       scheduleHostPeerDisconnectClose(targetViewerId, peer);
+      attemptHostIceRestart(peer, targetViewerId);
     }
-    if (state === 'failed' || state === 'closed') {
+    if (state === 'failed') {
+      attemptHostIceRestart(peer, targetViewerId);
+    }
+    if (state === 'closed') {
       closeHostPeer(targetViewerId);
     }
     updateHostStats();
@@ -1681,6 +1705,36 @@ function syncPeerTracks(peer, stream) {
   applyVideoSenderSettings(peer);
 }
 
+function setHostSendersActive(active) {
+  for (const peer of hostPeers.values()) {
+    for (const sender of peer.getSenders()) {
+      if (!sender.track) continue;
+      const params = sender.getParameters();
+      if (!params.encodings?.length) params.encodings = [{}];
+      params.encodings = params.encodings.map((encoding) => ({ ...encoding, active }));
+      sender.setParameters(params).catch(() => {});
+    }
+  }
+}
+
+function toggleHostStreamPause() {
+  hostStreamPaused = !hostStreamPaused;
+  setHostSendersActive(!hostStreamPaused);
+  if (pauseHostBtn) pauseHostBtn.textContent = hostStreamPaused ? 'Resume stream' : 'Pause stream';
+  setStatus(hostStreamPaused ? 'Stream paused.' : 'Stream resumed.');
+}
+
+function toggleHostAudioMute() {
+  hostAudioMuted = !hostAudioMuted;
+  if (localStream) {
+    localStream.getAudioTracks().forEach((track) => {
+      track.enabled = !hostAudioMuted;
+    });
+  }
+  if (muteHostAudioBtn) muteHostAudioBtn.textContent = hostAudioMuted ? 'Unmute audio' : 'Mute audio';
+  setStatus(hostAudioMuted ? 'Audio muted.' : 'Audio unmuted.');
+}
+
 function getPeerIdForConnection(peer) {
   for (const [viewerId, mappedPeer] of hostPeers.entries()) {
     if (mappedPeer === peer) return viewerId;
@@ -1694,6 +1748,26 @@ function clearHostPeerDisconnectTimer(viewerId) {
   if (!timer) return;
   clearTimeout(timer);
   hostPeerDisconnectTimers.delete(viewerId);
+}
+
+function attemptHostIceRestart(peer, viewerId) {
+  if (!peer || !viewerId || hostIceRestartState.get(viewerId)?.inFlight || !ws || ws.readyState !== WebSocket.OPEN) return;
+  hostIceRestartState.set(viewerId, { inFlight: true });
+  peer.createOffer({ iceRestart: true })
+    .then((offer) => peer.setLocalDescription(offer).then(() => offer))
+    .then((offer) => {
+      ws.send(JSON.stringify({ type: 'signal', data: { from: clientId, to: viewerId, offer: peer.localDescription || offer } }));
+      const timer = setTimeout(() => {
+        const current = hostPeers.get(viewerId);
+        if (current === peer && peer.connectionState !== 'connected') closeHostPeer(viewerId);
+        hostIceRestartState.delete(viewerId);
+      }, 8000);
+      hostIceRestartState.set(viewerId, { inFlight: true, timer });
+    })
+    .catch(() => {
+      hostIceRestartState.delete(viewerId);
+      closeHostPeer(viewerId);
+    });
 }
 
 function scheduleHostPeerDisconnectClose(viewerId, peer) {
@@ -1710,6 +1784,9 @@ function scheduleHostPeerDisconnectClose(viewerId, peer) {
 
 function closeHostPeer(viewerId) {
   if (!viewerId) return;
+  const restartState = hostIceRestartState.get(viewerId);
+  if (restartState?.timer) clearTimeout(restartState.timer);
+  hostIceRestartState.delete(viewerId);
   clearHostPeerDisconnectTimer(viewerId);
   const peer = hostPeers.get(viewerId);
   if (peer) {
@@ -1909,6 +1986,20 @@ async function buildHostStream() {
   return stream;
 }
 
+function describeCaptureError(error) {
+  const name = error?.name || '';
+  if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+    return 'Screen or audio permission was denied. Allow access in Windows Privacy settings and try again.';
+  }
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+    return 'The selected capture device is unavailable. Choose another source or refresh devices.';
+  }
+  if (name === 'NotReadableError') {
+    return 'Windows could not read the selected source. Close other capture apps and try again.';
+  }
+  return error?.message || 'Windows could not start capture. Choose another source and try again.';
+}
+
 function stopTracks(stream) {
   if (!stream) return;
   for (const track of stream.getTracks()) {
@@ -1930,7 +2021,7 @@ async function startHost() {
   try {
     localStream = await buildHostStream();
   } catch (error) {
-    setStatus('Capture failed: ' + error.message);
+    setStatus('Capture failed: ' + describeCaptureError(error));
     return;
   }
 
@@ -1939,6 +2030,8 @@ async function startHost() {
 
   startHostBtn.disabled = true;
   stopHostBtn.disabled = false;
+  if (pauseHostBtn) pauseHostBtn.disabled = false;
+  if (muteHostAudioBtn) muteHostAudioBtn.disabled = false;
 
   setStatus(
     publishRoomCode
@@ -1983,6 +2076,16 @@ async function handleLiveSourceChange() {
 function stopHost(sendSignal) {
   stopTracks(localStream);
   localStream = null;
+  hostStreamPaused = false;
+  hostAudioMuted = false;
+  if (pauseHostBtn) {
+    pauseHostBtn.disabled = true;
+    pauseHostBtn.textContent = 'Pause stream';
+  }
+  if (muteHostAudioBtn) {
+    muteHostAudioBtn.disabled = true;
+    muteHostAudioBtn.textContent = 'Mute audio';
+  }
   closeAllHostPeers();
   stopAdaptiveStreamingLoop();
 
