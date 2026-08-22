@@ -1100,7 +1100,8 @@ function connectSignaling() {
           setStatus('Waiting for host...');
         }
       } else {
-        setStatus('Host signaling ready.');
+        setStatus(requiresApproval ? 'Host ready. Viewer approval is on.' : 'Host ready. Viewer approval is off.');
+        renderPendingViewers();
       }
       return;
     }
@@ -1116,6 +1117,10 @@ function connectSignaling() {
     }
 
     if (message.type === 'viewer-list' && mode === 'host') {
+      if (typeof message.requiresModeration === 'boolean') {
+        requiresApproval = message.requiresModeration;
+        if (requiresApprovalEl) requiresApprovalEl.checked = requiresApproval;
+      }
       pendingViewerIds.clear();
       for (const viewer of message.viewers || []) {
         if (viewer.status === 'pending' && viewer.clientId) {
