@@ -1921,7 +1921,7 @@ function syncAdaptiveStreamingLoop() {
   if (adaptiveTuneTimer) return;
   adaptiveTuneTimer = setInterval(() => {
     runAdaptiveStreamingPass().catch(() => {});
-  }, 2500);
+  }, 1500);
   runAdaptiveStreamingPass().catch(() => {});
 }
 
@@ -2011,7 +2011,7 @@ async function measureAdaptiveSettings(peer, previousState) {
   const smoothedRoundTripTime = smoothValue(previousState.smoothedRoundTripTime, roundTripTime, 0.2, 0.35);
   const smoothedPacketsLostRatio = smoothValue(previousState.smoothedPacketsLostRatio, packetsLostRatio, 0.22, 0.38);
   const networkCap = availableOutgoingBitrate > 0 ? Math.min(availableOutgoingBitrate * 0.9, manualCap) : manualCap;
-  const warmupBitrateFloor = Math.min(manualCap, connectedViewerCount > 1 ? 6_500_000 : 8_500_000);
+  const warmupBitrateFloor = Math.min(manualCap, connectedViewerCount > 1 ? 5_000_000 : 6_500_000);
   let poorPasses = previousState.poorPasses || 0;
   let goodPasses = previousState.goodPasses || 0;
   let targetBitrate = Math.max(warmupBitrateFloor, networkCap);
@@ -2033,7 +2033,7 @@ async function measureAdaptiveSettings(peer, previousState) {
     goodPasses = 0;
   }
 
-  if (connectionAgeMs < 7000 && !severe) {
+  if (connectionAgeMs < 3000 && !severe) {
     targetBitrate = clamp(networkCap, warmupBitrateFloor, manualCap);
     targetFps = profile.maxFps;
   } else if (severe && poorPasses >= 2) {

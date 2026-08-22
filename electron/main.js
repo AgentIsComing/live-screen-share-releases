@@ -45,10 +45,6 @@ let installOnNextDownload = false;
 let manualUpdateCheckActive = false;
 let pendingUpdaterServiceTask = null;
 
-if (app?.commandLine?.appendSwitch) {
-  app.commandLine.appendSwitch('disable-features', 'AllowWgcScreenCapturer,AllowWgcWindowCapturer,AllowWgcZeroHz');
-}
-
 {
   const args = new Set(process.argv.map((value) => String(value || '').toLowerCase()));
   if (args.has('--install-updater-service')) {
