@@ -805,7 +805,10 @@ function updateHostStats() {
   } else if (viewerRoundTripTimeMs !== null || viewerRenderDelayMs !== null) {
     const rtt = viewerRoundTripTimeMs === null ? '--' : `${Math.round(viewerRoundTripTimeMs)} ms`;
     const render = viewerRenderDelayMs === null ? '--' : `${Math.round(viewerRenderDelayMs)} ms`;
-    hostStatsEl.textContent = `Network RTT: ${rtt} | Render delay: ${render}`;
+    const estimated = viewerRoundTripTimeMs === null || viewerRenderDelayMs === null
+      ? '--'
+      : `${Math.round((viewerRoundTripTimeMs / 2) + viewerRenderDelayMs)} ms`;
+    hostStatsEl.textContent = `Estimated end-to-end: ${estimated} | RTT: ${rtt} | Render: ${render}`;
   } else {
     hostStatsEl.textContent = '';
   }
@@ -1213,6 +1216,20 @@ async function confirmHostStartFromModal() {
   }
 
   publishRoomCode = publish.code || '';
+  sessionToken = publish.sessionToken || '';
+  joinCode = publishRoomCode;
+  if (ws) {
+    try { ws.close(); } catch {}
+    ws = null;
+    joined = false;
+  }
+  reconnectSignaling();
+  if (!await waitForSignalingJoin()) {
+    setStatus('Signaling authorization failed after room publish.');
+    hostStarting = false;
+    startHostBtn.disabled = false;
+    return;
+  }
   if (publish.code) {
     setStatus(`Room published. Mac join code: ${publish.code}. Room ID/password also remain valid.`);
   }
