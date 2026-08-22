@@ -488,7 +488,12 @@ ipcMain.handle('register-room-access', async (_event, payload = {}) => {
       wsUrl: normalizeWsUrl(payload.wsUrl),
       ttlSeconds: Number(payload.ttlSeconds || 900)
     });
-    return { ok: true, roomId: result.roomId, expiresAt: result.expiresAt || null };
+    return {
+      ok: true,
+      roomId: result.roomId,
+      code: result.code || null,
+      expiresAt: result.expiresAt || null
+    };
   } catch (error) {
     return { ok: false, error: error.message };
   }

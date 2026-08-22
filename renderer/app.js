@@ -83,6 +83,7 @@ let mode = 'host';
 let signalUrl = '';
 let roomId = '';
 let roomPassword = '';
+let publishRoomCode = '';
 let ws = null;
 let clientId = null;
 let pendingOffer = false;
@@ -1108,6 +1109,11 @@ async function confirmHostStartFromModal() {
     return;
   }
 
+  publishRoomCode = publish.code || '';
+  if (publish.code) {
+    setStatus(`Room published. Mac join code: ${publish.code}. Room ID/password also remain valid.`);
+  }
+
   setStatus('Starting capture...');
   await startHost();
   hostStarting = false;
@@ -1674,7 +1680,11 @@ async function startHost() {
   startHostBtn.disabled = true;
   stopHostBtn.disabled = false;
 
-  setStatus('Hosting started. Share Room ID + password.');
+  setStatus(
+    publishRoomCode
+      ? `Hosting started. Share join code ${publishRoomCode}, or Room ID + password.`
+      : 'Hosting started. Share Room ID + password.'
+  );
   updateAnnotationPermissionUI();
   syncAdaptiveStreamingLoop();
 }
