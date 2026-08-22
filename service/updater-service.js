@@ -147,6 +147,12 @@ async function checkAndUpdate() {
     }
   }
 
+  const existingNotice = readJson(NOTICE_PATH, {});
+  if (existingNotice.status === 'installing' && existingNotice.version === latest.version) {
+    log('app owns installer for update:', latest.version);
+    return;
+  }
+
   if (isAppRunning()) {
     writeJson(NOTICE_PATH, {
       status: 'ready',

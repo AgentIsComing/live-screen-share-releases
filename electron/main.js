@@ -43,6 +43,7 @@ let tunnelProc = null;
 let updateDownloaded = false;
 let installOnNextDownload = false;
 let manualUpdateCheckActive = false;
+let updateInstallInFlight = false;
 let pendingUpdaterServiceTask = null;
 
 {
@@ -125,6 +126,15 @@ function readUpdaterServiceNotice() {
     return JSON.parse(fs.readFileSync(updaterServiceNoticePath, 'utf-8'));
   } catch {
     return null;
+  }
+}
+
+function writeUpdaterServiceNotice(notice) {
+  try {
+    fs.mkdirSync(path.dirname(updaterServiceNoticePath), { recursive: true });
+    fs.writeFileSync(updaterServiceNoticePath, JSON.stringify(notice, null, 2));
+  } catch {
+    // ignore
   }
 }
 
@@ -256,6 +266,11 @@ async function callCodeService(baseUrl, route, body) {
 function setupAutoUpdater() {
   if (!app.isPackaged || !autoUpdater) {
     return;
+  }
+
+  const serviceNotice = readUpdaterServiceNotice();
+  if (serviceNotice?.status === 'installing') {
+    clearUpdaterServiceNotice();
   }
 
   autoUpdater.autoDownload = true;
@@ -555,17 +570,23 @@ ipcMain.handle('check-for-updates', async () => {
     return { ok: false, error: 'Update checks run only in installed builds.' };
   }
 
+  if (updateInstallInFlight || manualUpdateCheckActive) {
+    return { ok: true, installing: updateInstallInFlight, checking: manualUpdateCheckActive };
+  }
+
   try {
     const serviceNotice = readUpdaterServiceNotice();
     if (serviceNotice?.status === 'ready' && serviceNotice?.installerPath && fs.existsSync(serviceNotice.installerPath)) {
+      updateInstallInFlight = true;
       sendUpdaterStatus(`Installing background update ${serviceNotice.version || ''}...`);
+      writeUpdaterServiceNotice({ ...serviceNotice, status: 'installing', updatedAt: new Date().toISOString() });
       runSilentInstaller(serviceNotice.installerPath);
-      clearUpdaterServiceNotice();
       setTimeout(() => app.quit(), 350);
       return { ok: true, installing: true, source: 'service' };
     }
 
     if (updateDownloaded) {
+      updateInstallInFlight = true;
       installOnNextDownload = false;
       manualUpdateCheckActive = false;
       sendUpdaterStatus('Installing update now...');
@@ -573,6 +594,7 @@ ipcMain.handle('check-for-updates', async () => {
         try {
           autoUpdater.quitAndInstall(true, true);
         } catch (error) {
+          updateInstallInFlight = false;
           sendUpdaterStatus(`Install failed: ${error.message}`);
         }
       }, 400);
@@ -584,6 +606,7 @@ ipcMain.handle('check-for-updates', async () => {
     await autoUpdater.checkForUpdates();
     return { ok: true, installing: false };
   } catch (error) {
+    updateInstallInFlight = false;
     installOnNextDownload = false;
     manualUpdateCheckActive = false;
     return { ok: false, error: error.message };
