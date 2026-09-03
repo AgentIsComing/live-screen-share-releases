@@ -492,25 +492,29 @@ ipcMain.handle('get-tunnel-url', () => {
 });
 
 ipcMain.handle('register-room-access', async (_event, payload = {}) => {
-  try {
-    const result = await callCodeService(payload.baseUrl, '/register-room', {
-      roomId: normalizeRoomId(payload.roomId),
-      password: normalizePassword(payload.password),
-      wsUrl: normalizeWsUrl(payload.wsUrl),
-      ttlSeconds: Number(payload.ttlSeconds || 900)
-    });
-    return {
-      ok: true,
-      roomId: result.roomId,
-      code: result.code || null,
-      wsUrl: result.wsUrl || null,
-      sessionToken: result.sessionToken || null,
-      expiresAt: result.expiresAt || null
-    };
-  } catch (error) {
-    return { ok: false, error: error.message };
-  }
-});
+   try {
+     const result = await callCodeService(payload.baseUrl, '/register-room', {
+       roomId: normalizeRoomId(payload.roomId),
+       password: normalizePassword(payload.password),
+       wsUrl: normalizeWsUrl(payload.wsUrl),
+       ttlSeconds: Number(payload.ttlSeconds || 900)
+     });
+     let sessionToken = result.sessionToken || null;
+     if (!sessionToken) {
+       sessionToken = `local-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+     }
+     return {
+       ok: true,
+       roomId: result.roomId,
+       code: result.code || null,
+       wsUrl: result.wsUrl || null,
+       sessionToken,
+       expiresAt: result.expiresAt || null
+     };
+   } catch (error) {
+     return { ok: false, error: error.message };
+   }
+ });
 
 ipcMain.handle('resolve-room-access', async (_event, payload = {}) => {
   try {
